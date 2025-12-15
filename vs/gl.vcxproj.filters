@@ -1,0 +1,51 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="examples">
+      <UniqueIdentifier>{af885bc0-32f7-4f98-b730-cfc9fccdf808}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="hi">
+      <UniqueIdentifier>{da677a43-7ca3-41c9-81f6-28b7f31d0c94}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="hi\native">
+      <UniqueIdentifier>{88395cb4-a630-42d7-bc89-1e594b7ce840}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\hi\native\framebuffer.hpp">
+      <Filter>hi\native</Filter>
+    </ClInclude>
+    <ClInclude Include="..\hi\native\opengl.hpp">
+      <Filter>hi\native</Filter>
+    </ClInclude>
+    <ClInclude Include="..\hi\native\socket.hpp">
+      <Filter>hi\native</Filter>
+    </ClInclude>
+    <ClInclude Include="..\hi\native\window.hpp">
+      <Filter>hi\native</Filter>
+    </ClInclude>
+    <ClInclude Include="..\hi\native\terminal.hpp">
+      <Filter>hi\native</Filter>
+    </ClInclude>
+    <ClInclude Include="..\hi\io.hpp">
+      <Filter>hi</Filter>
+    </ClInclude>
+    <ClInclude Include="..\hi\native\types.hpp">
+      <Filter>hi\native</Filter>
+    </ClInclude>
+    <ClInclude Include="..\hi\native\syscalls.hpp">
+      <Filter>hi\native</Filter>
+    </ClInclude>
+    <ClInclude Include="..\hi\native\battery.hpp">
+      <Filter>hi\native</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="..\examples\main.cpp">
+      <Filter>examples</Filter>
+    </ClCompile>
+    <ClCompile Include="..\hi\io.cpp">
+      <Filter>hi</Filter>
+    </ClCompile>
+  </ItemGroup>
+</Project>
