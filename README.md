@@ -55,6 +55,7 @@ hi/
 ├── filesystem.hpp          # High-level filesystem API
 ├── io.hpp                  # General header for everything that `native` dir has
 └── window.hpp              # Window + event loop abstraction
+```
 
 ## Core Components
 
