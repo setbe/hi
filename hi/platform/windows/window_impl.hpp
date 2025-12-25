@@ -97,7 +97,7 @@ namespace hi {
             return true;
         }
         inline void Window::setTitle(const char* title) const noexcept {
-            IO_CONSTEXPR_VAR usize BUF_SIZE = 128;
+            IO_CONSTEXPR_VAR io::usize BUF_SIZE = 128;
             wchar_t wide_buf[BUF_SIZE] = {};
             int len = MultiByteToWideChar(
                 /*       CodePage */ CP_UTF8,

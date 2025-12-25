@@ -15,10 +15,10 @@
 
 // ---------------------- helpers ----------------------
 
-static bool can_write_bytes(void* p, usize n) {
+static bool can_write_bytes(void* p, io::usize n) {
     volatile unsigned char* b = static_cast<volatile unsigned char*>(p);
-    for (usize i = 0; i < n; ++i) b[i] = static_cast<unsigned char>(i);
-    for (usize i = 0; i < n; ++i) if (b[i] != static_cast<unsigned char>(i)) return false;
+    for (io::usize i = 0; i < n; ++i) b[i] = static_cast<unsigned char>(i);
+    for (io::usize i = 0; i < n; ++i) if (b[i] != static_cast<unsigned char>(i)) return false;
     return true;
 }
 
@@ -26,9 +26,9 @@ static bool can_write_bytes(void* p, usize n) {
 
 TEST_CASE("io::alloc returns writable memory and io::free releases it", "[io][syscalls][alloc]") {
     // test a few sizes including 0-ish and larger blocks
-    const usize sizes[] = { 1, 8, 64, 4096, 65536 };
+    const io::usize sizes[] = { 1, 8, 64, 4096, 65536 };
 
-    for (usize sz : sizes) {
+    for (io::usize sz : sizes) {
         void* p = io::alloc(sz);
         REQUIRE(p != nullptr);
 
@@ -87,7 +87,7 @@ TEST_CASE("io::sleep_ms sleeps at least roughly the requested time", "[io][sysca
 #endif
 
     // and must not sleep ridiculously long in normal conditions
-    REQUIRE(dt_ms < 200.0);
+    REQUIRE(dt_ms < 50.0);
 }
 
 TEST_CASE("io::exit_process terminates the process with given code (run in child)", "[io][syscalls][exit]") {

@@ -75,7 +75,7 @@ TEST_CASE("io::vector reserve grows and preserves values", "[io][vector]") {
     for (int i = 0; i < 50; ++i) REQUIRE(v.push_back(i));
 
     REQUIRE(v.size() == 50);
-    for (int i = 0; i < 50; ++i) REQUIRE(v[(usize)i] == i);
+    for (int i = 0; i < 50; ++i) REQUIRE(v[(io::usize)i] == i);
 
     auto cap = v.capacity();
     REQUIRE(v.reserve(cap));          // no shrink
@@ -142,7 +142,7 @@ TEST_CASE("io::vector move ctor/assign transfers ownership and leaves source emp
 
     io::vector<int> b(io::move(a));
     REQUIRE(b.size() == 10);
-    for (int i = 0; i < 10; ++i) REQUIRE(b[(usize)i] == i);
+    for (int i = 0; i < 10; ++i) REQUIRE(b[(io::usize)i] == i);
 
     // moved-from should be safe to destroy; size/cap aren't specified, but your code sets them to 0/null
     REQUIRE(a.size() == 0);
@@ -318,7 +318,7 @@ TEST_CASE("io::deque wrap-around correctness (mixed pushes/pops)", "[io][deque]"
     REQUIRE(d.size() == 30);
     // expected: 10..39
     for (int i = 0; i < 30; ++i) {
-        REQUIRE(d[(usize)i] == (10 + i));
+        REQUIRE(d[(io::usize)i] == (10 + i));
     }
 
     // push_front a few

@@ -1,26 +1,3 @@
-/*
-* The MIT License (MIT)
-*
-* Copyright © 2025 setbe
-*
-* Permission is hereby granted, free of charge, to any person obtaining a copy
-* of this software and associated documentation files (the “Software”), to deal
-* in the Software without restriction, including without limitation the rights
-* to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-* copies of the Software, and to permit persons to whom the Software is
-* furnished to do so, subject to the following conditions:
-*
-* The above copyright notice and this permission notice shall be included in
-* all copies or substantial portions of the Software.
-*
-* THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-* IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-* FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
-* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-* DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
-* OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
-* OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/
 #pragma once
 
 #include "native/types.hpp"
@@ -56,3 +33,62 @@ static void(__cdecl* _onexit(void(__cdecl* func)(void)))(void) {
 }
 #endif
 #pragma endregion
+
+
+
+
+// --- Diagnostics helpers (portable-ish) ---
+
+#if defined(_MSC_VER)
+#  define IO_DIAG_PUSH()            __pragma(warning(push))
+#  define IO_DIAG_POP()             __pragma(warning(pop))
+#  define IO_DIAG_DISABLE_MSVC(x)   __pragma(warning(disable: x))
+#else
+#  define IO_DIAG_PUSH()
+#  define IO_DIAG_POP()
+#  define IO_DIAG_DISABLE_MSVC(x)
+#endif
+
+#if defined(__clang__)
+#  define IO_DIAG_CLANG_PUSH()      _Pragma("clang diagnostic push")
+#  define IO_DIAG_CLANG_POP()       _Pragma("clang diagnostic pop")
+#  define IO_DIAG_CLANG_IGNORE(w)   _Pragma(w)
+#else
+#  define IO_DIAG_CLANG_PUSH()
+#  define IO_DIAG_CLANG_POP()
+#  define IO_DIAG_CLANG_IGNORE(w)
+#endif
+
+#if defined(__GNUC__) && !defined(__clang__)
+#  define IO_DIAG_GCC_PUSH()        _Pragma("GCC diagnostic push")
+#  define IO_DIAG_GCC_POP()         _Pragma("GCC diagnostic pop")
+#  define IO_DIAG_GCC_IGNORE(w)     _Pragma(w)
+#else
+#  define IO_DIAG_GCC_PUSH()
+#  define IO_DIAG_GCC_POP()
+#  define IO_DIAG_GCC_IGNORE(w)
+#endif
+
+// Unified push/pop
+#define IO_DIAG_ALL_PUSH()  do { IO_DIAG_PUSH(); IO_DIAG_CLANG_PUSH(); IO_DIAG_GCC_PUSH(); } while(0)
+#define IO_DIAG_ALL_POP()   do { IO_DIAG_CLANG_POP(); IO_DIAG_GCC_POP(); IO_DIAG_POP(); } while(0)
+
+// Disable "use after move" warnings:
+// - MSVC: C26800
+// - Clang/GCC: try ignore -Wuse-after-move (if supported), otherwise harmless.
+#if defined(__clang__)
+#  define IO_DIAG_DISABLE_USE_AFTER_MOVE() \
+     do { \
+       IO_DIAG_DISABLE_MSVC(26800); \
+       IO_DIAG_CLANG_IGNORE("clang diagnostic ignored \"-Wuse-after-move\""); \
+     } while(0)
+#elif defined(__GNUC__) && !defined(__clang__)
+#  define IO_DIAG_DISABLE_USE_AFTER_MOVE() \
+     do { \
+       IO_DIAG_DISABLE_MSVC(26800); \
+       IO_DIAG_GCC_IGNORE("GCC diagnostic ignored \"-Wuse-after-move\""); \
+     } while(0)
+#else
+#  define IO_DIAG_DISABLE_USE_AFTER_MOVE() \
+     do { IO_DIAG_DISABLE_MSVC(26800); } while(0)
+#endif

@@ -35,8 +35,8 @@ namespace hi {
             void Render(IWindow&) noexcept;
             void SwapBuffers(const IWindow&) const noexcept;
             IO_NODISCARD bool Recreate(const IWindow& win, int width, int height, AboutError& ae) noexcept;
-            void Clear(u32 rgba, int width, int height) const noexcept;
-            void DrawPixel(int x, int y, int width, int height, u32 color) const noexcept;
+            void Clear(io::u32 rgba, int width, int height) const noexcept;
+            void DrawPixel(int x, int y, int width, int height, io::u32 color) const noexcept;
         
         #if defined(__linux__)
         

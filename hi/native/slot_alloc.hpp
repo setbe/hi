@@ -3,12 +3,19 @@
 #include "syscalls.hpp"
 #include "atomic.hpp"
 
+#include <cstddef> // std::max_align_t
+
+
 namespace io {
     namespace native {
 
+        static constexpr usize DEFAULT_ALIGNMENT = alignof(std::max_align_t);
+
         struct BlockHeader {
-            usize size;  // request real size
+            usize size;  // total bytes including header
         };
+        static_assert(alignof(BlockHeader) >= DEFAULT_ALIGNMENT, "header align");
+        static_assert(sizeof(BlockHeader) % DEFAULT_ALIGNMENT == 0, "payload alignment");
 
         struct FreeNode {
             FreeNode* next;
@@ -74,30 +81,34 @@ namespace io {
         }
 
         static inline void* allocate_block(usize size) {
-            if (auto pool = pool_for_size(size)) {
-                void* user_ptr = pool->allocate();
-                BlockHeader* hdr = reinterpret_cast<BlockHeader*>(user_ptr);
-                hdr->size = size;
-                return reinterpret_cast<char*>(hdr + 1); // return to user after header
+            const usize total = sizeof(BlockHeader) + size;
+
+            if (auto pool = pool_for_size(total)) {
+                void* raw = pool->allocate();
+                if (!raw) return nullptr;
+
+                auto* hdr = static_cast<BlockHeader*>(raw);
+                hdr->size = total;
+                return hdr + 1;
             }
-            else {
-                // Large data via io::alloc
-                BlockHeader* hdr = static_cast<BlockHeader*>(io::alloc(sizeof(BlockHeader) + size));
-                if (!hdr) return nullptr;
-                hdr->size = size;
-                return reinterpret_cast<char*>(hdr + 1);
-            }
+
+            auto* hdr = static_cast<BlockHeader*>(io::alloc(total));
+            if (!hdr) return nullptr;
+            hdr->size = total;
+            return hdr + 1;
         }
 
         static inline void deallocate_block(void* ptr) noexcept {
             if (!ptr) return;
-            BlockHeader* hdr = reinterpret_cast<BlockHeader*>(ptr) - 1;
-            usize size = hdr->size;
 
-            if (auto pool = pool_for_size(size))
+            auto* hdr = static_cast<BlockHeader*>(ptr) - 1;
+            const usize total = hdr->size;
+
+            if (auto pool = pool_for_size(total))
                 pool->deallocate(hdr);
             else
                 io::free(hdr);
         }
+
     } // namespace native
 } // namespace io

@@ -7,17 +7,17 @@
 // ------------------------------------------------------------
 //              Compile-time sanity checks
 // ------------------------------------------------------------
-static_assert(sizeof(i8) == 1, "i8 must be 1 byte");
-static_assert(sizeof(u8) == 1, "u8 must be 1 byte");
-static_assert(sizeof(i16) == 2, "i16 must be 2 bytes");
-static_assert(sizeof(u16) == 2, "u16 must be 2 bytes");
-static_assert(sizeof(i32) == 4, "i32 must be 4 bytes");
-static_assert(sizeof(u32) == 4, "u32 must be 4 bytes");
-static_assert(sizeof(i64) == 8, "i64 must be 8 bytes");
-static_assert(sizeof(u64) == 8, "u64 must be 8 bytes");
+static_assert(sizeof(io::i8) == 1, "i8 must be 1 byte");
+static_assert(sizeof(io::u8) == 1, "u8 must be 1 byte");
+static_assert(sizeof(io::i16) == 2, "i16 must be 2 bytes");
+static_assert(sizeof(io::u16) == 2, "u16 must be 2 bytes");
+static_assert(sizeof(io::i32) == 4, "i32 must be 4 bytes");
+static_assert(sizeof(io::u32) == 4, "u32 must be 4 bytes");
+static_assert(sizeof(io::i64) == 8, "i64 must be 8 bytes");
+static_assert(sizeof(io::u64) == 8, "u64 must be 8 bytes");
 
-static_assert(sizeof(usize) == sizeof(sizeof(0)), "usize must match sizeof(...) result type size");
-static_assert(sizeof(isize) == sizeof(static_cast<char*>(nullptr) - static_cast<char*>(nullptr)),
+static_assert(sizeof(io::usize) == sizeof(sizeof(0)), "usize must match sizeof(...) result type size");
+static_assert(sizeof(io::isize) == sizeof(static_cast<char*>(nullptr) - static_cast<char*>(nullptr)),
     "isize must match pointer-difference expression type size");
 
 // ------------------------------------------------------------

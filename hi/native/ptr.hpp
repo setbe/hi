@@ -96,34 +96,36 @@ namespace io {
     };
 
 
-    // ------------------------- unique_array ----------------------------------
-    template <typename T>
-    class unique_array {
-    public:
-        unique_array() noexcept : ptr_(nullptr) {}
-        explicit unique_array(T* p) noexcept : ptr_(p) {}
+    // ------------------------- unique_bytes ----------------------------------
 
-        unique_array(unique_array&& other) noexcept : ptr_(other.ptr_) { other.ptr_ = nullptr; }
-        unique_array& operator=(unique_array&& other) noexcept {
-            if (this != &other) { reset(); ptr_ = other.ptr_; other.ptr_ = nullptr; }
+    struct unique_bytes {
+        u8* p{ nullptr };
+
+        unique_bytes() noexcept = default;
+        explicit unique_bytes(u8* x) noexcept : p(x) {}
+        ~unique_bytes() { reset(nullptr); }
+
+        unique_bytes(const unique_bytes&) = delete;
+        unique_bytes& operator=(const unique_bytes&) = delete;
+
+        unique_bytes(unique_bytes&& o) noexcept : p(o.p) { o.p = nullptr; }
+        unique_bytes& operator=(unique_bytes&& o) noexcept {
+            if (this != &o) {
+                reset(nullptr);
+                p = o.p;
+                o.p = nullptr;
+            }
             return *this;
         }
 
-        ~unique_array() { reset(); }
+        IO_NODISCARD u8* get() const noexcept { return p; }
 
-        T* get() const noexcept { return ptr_; }
-        T& operator[](usize i) const noexcept { return ptr_[i]; }
-
-        void reset(T* p = nullptr) noexcept {
-            if (ptr_) { delete[] ptr_; }
-            ptr_ = p;
+        void reset(u8* x) noexcept {
+            if (p) ::operator delete[](p);
+            p = x;
         }
-
-        unique_array(const unique_array&) = delete;
-        unique_array& operator=(const unique_array&) = delete;
-
-    private:
-        T* ptr_;
     };
+
+
 
 } // namespace io

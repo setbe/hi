@@ -90,6 +90,30 @@
     <ClInclude Include="..\examples\tests\types.hpp">
       <Filter>tests</Filter>
     </ClInclude>
+    <ClInclude Include="..\hi\native\file.hpp">
+      <Filter>hi\native</Filter>
+    </ClInclude>
+    <ClInclude Include="..\hi\platform\windows\file_impl.hpp">
+      <Filter>hi\platform\windows</Filter>
+    </ClInclude>
+    <ClInclude Include="..\examples\tests\atomic.hpp">
+      <Filter>tests</Filter>
+    </ClInclude>
+    <ClInclude Include="..\examples\tests\catch.hpp">
+      <Filter>tests</Filter>
+    </ClInclude>
+    <ClInclude Include="..\examples\tests\containers.hpp">
+      <Filter>tests</Filter>
+    </ClInclude>
+    <ClInclude Include="..\examples\tests\file.hpp">
+      <Filter>tests</Filter>
+    </ClInclude>
+    <ClInclude Include="..\examples\tests\filesystem.hpp">
+      <Filter>tests</Filter>
+    </ClInclude>
+    <ClInclude Include="..\examples\tests\syscalls.hpp">
+      <Filter>tests</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\hi\source.cpp">

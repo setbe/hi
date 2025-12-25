@@ -34,8 +34,13 @@ namespace io {
             explicit inline Out() noexcept {}
             inline ~Out() noexcept {}
 
+            static inline void reset() noexcept;
             static inline void write(const char* msg, usize len) noexcept;
             static inline void flush() noexcept;
+
+            // Take current out_buffer content as view and reset the buffer.
+            // Does NOT write to terminal. Intended for "format into buffer" use-case.
+            inline io::char_view scrap_view() const noexcept;
 
         protected:
             static inline void put(char c) noexcept;
@@ -47,7 +52,7 @@ namespace io {
             static inline unsigned pow10(int n) noexcept;
 
         public:
-            // --- primitive operators ---
+            // --- primitive ---
             inline const Out& operator<<(double v) const noexcept;
             inline const Out& operator<<(bool b) const noexcept;
             inline const Out& operator<<(const char* s) const noexcept;
@@ -65,11 +70,12 @@ namespace io {
             inline const Out& operator<<(u64 v) const noexcept;
 
             // --- complex operators ---
+            inline const Out& operator<<(io::char_view v) const noexcept;
             inline const Out& operator<<(const ::io::string& v) const noexcept;
             inline const Out& operator<<(const ::io::wstring& w) const noexcept;
-
+            
+            // --- manipulators ---
             inline const Out& operator<<(const Out& (*manip)(const Out&)) const noexcept;
-
             
             struct HexPrinter { const void* data; usize size; const Out& operator()(const Out& o) const noexcept; };
             static inline HexPrinter hex(const void* data, usize size) noexcept;
@@ -103,10 +109,8 @@ namespace io {
 inline io::native::In& operator>>(io::native::In& in_obj, io::view<char> v) noexcept {
     if (!v.data() || v.size() == 0) return in_obj;
 
-    usize n = in_obj.read(v);   // read into buffer
-    if (n < v.size()) {
-        v[n] = 0;               // null-terminate
-    }
+    io::usize n = in_obj.read(v); // read into buffer
+    if (n < v.size()) v[n] = 0;   // null-terminate
     return in_obj;
 }
 

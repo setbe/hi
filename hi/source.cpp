@@ -9,7 +9,7 @@
 #if defined(IO_NOSTD) && defined(IO_MICROSHIT_NOSTD)
 namespace std {
     extern const nothrow_t nothrow;
-    using size_t = usize;
+    using size_t = io::usize;
 }
 
 extern "C" {
@@ -47,8 +47,8 @@ namespace hi {
 } // namespace hi
 
 
+#if defined(IO_NOSTD)
 // ============================================================================
-
 // -------- Single object --------
 void* __CRTDECL operator new(std::size_t size)                                 { return io::native::allocate_block(size); }
 void __CRTDECL operator delete(void* ptr) noexcept                             { io::native::deallocate_block(ptr); }
@@ -66,4 +66,4 @@ void __CRTDECL operator delete(void* ptr, const std::nothrow_t&) noexcept      {
 // -------- Nothrow array --------
 void* __CRTDECL operator new[](std::size_t size, const std::nothrow_t&) noexcept { return io::native::allocate_block(size); }
 void __CRTDECL operator delete[](void* ptr, const std::nothrow_t&) noexcept    { io::native::deallocate_block(ptr); }
-
+#endif // IO_NOSTD

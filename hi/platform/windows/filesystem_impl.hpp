@@ -16,20 +16,23 @@ namespace fs {
 
         // -------- UTF-8 <-> UTF-16 helpers (RAII via io::wstring) --------
 
-        static bool utf8_to_wide(const char* utf8, io::wstring& out) noexcept {
+        static bool utf8_to_wide(io::char_view utf8, io::wstring& out) noexcept {
             out.clear();
             if (!utf8) return false;
 
-            // required wchar count incl. null
-            int need = ::MultiByteToWideChar(CP_UTF8, 0, utf8, -1, nullptr, 0);
+            // required wchar count WITHOUT null terminator
+            int need = ::MultiByteToWideChar(CP_UTF8, 0,
+                utf8.data(), (int)utf8.size(),
+                nullptr, 0);
             if (need <= 0) return false;
 
-            // we store without the terminator in size(), but buffer must contain terminator
-            // resize(need-1) makes internal buffer size = (need-1)+1 == need
-            if (!out.resize(static_cast<usize>(need - 1))) return false;
+            // resize(need) => size() == need, storage includes '\0'
+            if (!out.resize(static_cast<io::usize>(need))) return false;
 
-            int wrote = ::MultiByteToWideChar(CP_UTF8, 0, utf8, -1, out.data(), need);
-            return wrote > 0;
+            int wrote = ::MultiByteToWideChar(CP_UTF8, 0,
+                utf8.data(), (int)utf8.size(),
+                out.data(), need);
+            return wrote == need;
         }
 
         static bool wide_to_utf8(const wchar_t* w, io::string& out) noexcept {
@@ -46,7 +49,7 @@ namespace fs {
             if (need <= 0) return false;
 
             // out.resize(need-1) => internal buffer size becomes need incl '\0'
-            if (!out.resize(static_cast<usize>(need - 1))) return false;
+            if (!out.resize(static_cast<io::usize>(need - 1))) return false;
 
             int wrote = ::WideCharToMultiByte(
                 CP_UTF8, 0,
@@ -80,19 +83,21 @@ namespace fs {
         static bool make_search_pattern(const io::wstring& dir, io::wstring& out_pat) noexcept {
             out_pat.clear();
             if (!out_pat.reserve(dir.size() + 3)) return false;
-            out_pat.append(dir.c_str());
+            if (!out_pat.append(dir.c_str())) return false;
 
             if (!dir.empty()) {
                 wchar_t last = dir[dir.size() - 1];
-                if (last != L'\\' && last != L'/') out_pat.push_back(L'\\');
+                if (last != L'\\' && last != L'/') {
+                    if (!out_pat.push_back(L'\\')) return false;
+                }
             }
-            out_pat.push_back(L'*');
+            if (!out_pat.push_back(L'*')) return false;
             return true;
         }
 
         // ---------------- API implementation ----------------
 
-        inline bool stat(const char* utf8_path, file_type& out_type, u64* out_size) noexcept {
+        inline bool stat(io::char_view utf8_path, file_type& out_type, io::u64* out_size) noexcept {
             if (!utf8_path) {
                 out_type = file_type::unknown;
                 if (out_size) *out_size = 0;
@@ -124,30 +129,28 @@ namespace fs {
             return true;
         }
 
-        inline bool create_directory(const char* utf8_path) noexcept {
+        inline bool create_directory(io::char_view utf8_path) noexcept {
             if (!utf8_path) return false;
             io::wstring w;
             if (!utf8_to_wide(utf8_path, w)) return false;
             return ::CreateDirectoryW(w.c_str(), nullptr) != 0;
         }
 
-        inline bool remove(const char* utf8_path) noexcept {
+        inline bool remove(io::char_view utf8_path) noexcept {
             if (!utf8_path) return false;
 
             file_type ft{};
-            u64 sz{};
+            io::u64 sz{};
             if (!stat(utf8_path, ft, &sz)) return false;
 
             io::wstring w;
             if (!utf8_to_wide(utf8_path, w)) return false;
-
-            if (ft == file_type::directory) {
+            if (ft == file_type::directory)
                 return ::RemoveDirectoryW(w.c_str()) != 0;
-            }
             return ::DeleteFileW(w.c_str()) != 0;
         }
 
-        inline bool rename(const char* utf8_from, const char* utf8_to) noexcept {
+        inline bool rename(io::char_view utf8_from, io::char_view utf8_to) noexcept {
             if (!utf8_from || !utf8_to) return false;
 
             io::wstring wfrom, wto;
@@ -166,7 +169,7 @@ namespace fs {
 
             // 2) allocate wide buffer (size == need-1 characters, but storage includes '\0')
             io::wstring wdir;
-            if (!wdir.resize(static_cast<usize>(need - 1))) return false;
+            if (!wdir.resize(static_cast<io::usize>(need - 1))) return false;
 
             // 3) fill
             DWORD got = ::GetCurrentDirectoryW(need, wdir.data());
@@ -174,7 +177,7 @@ namespace fs {
             // If path changed between calls, got may be >= need; handle by retry
             if (got >= need) {
                 // got is required length excluding '\0' in some cases; safest: retry with got+1
-                if (!wdir.resize(static_cast<usize>(got))) return false;
+                if (!wdir.resize(static_cast<io::usize>(got))) return false;
                 DWORD got2 = ::GetCurrentDirectoryW(got + 1, wdir.data());
                 if (got2 == 0 || got2 > got) return false;
             }
@@ -183,28 +186,24 @@ namespace fs {
             return wide_to_utf8(wdir.c_str(), out_utf8);
         }
 
-        inline dir_handle* open_dir(const char* utf8_path) noexcept {
+        inline dir_handle* open_dir(io::char_view utf8_path) noexcept {
             if (!utf8_path) return nullptr;
 
             dir_handle* h = new dir_handle{};
             if (!h) return nullptr;
-
             if (!utf8_to_wide(utf8_path, h->dir_prefix)) {
                 delete h;
                 return nullptr;
             }
-
             if (!make_search_pattern(h->dir_prefix, h->search_pattern)) {
                 delete h;
                 return nullptr;
             }
-
             h->find = ::FindFirstFileW(h->search_pattern.c_str(), &h->data);
             if (h->find == INVALID_HANDLE_VALUE) {
                 delete h;
                 return nullptr;
             }
-
             h->first_pending = true;
             return h;
         }
@@ -212,7 +211,7 @@ namespace fs {
         inline bool read_dir(dir_handle* h,
             io::string& out_name,
             file_type& out_type,
-            u64& out_size) noexcept
+            io::u64& out_size) noexcept
         {
             if (!h) return false;
 
@@ -225,7 +224,6 @@ namespace fs {
             else {
                 h->first_pending = false;
             }
-
             // Convert filename to UTF-8 into io::string
             if (!wide_to_utf8(data->cFileName, out_name))
                 out_name.clear(); // fallback empty
@@ -244,29 +242,6 @@ namespace fs {
             if (!h) return;
             if (h->find != INVALID_HANDLE_VALUE) ::FindClose(h->find);
             delete h;
-        }
-
-        inline void join_path(const char* base,
-            const char* name,
-            char* out_path,
-            usize out_capacity) noexcept
-        {
-            if (!out_path || out_capacity == 0) return;
-            usize pos = 0;
-
-            auto append = [&](const char* s) {
-                while (s && *s && pos + 1 < out_capacity) out_path[pos++] = *s++;
-            };
-
-            if (base && *base) {
-                append(base);
-                if (pos > 0 && out_path[pos - 1] != '\\' && out_path[pos - 1] != '/') {
-                    if (pos + 1 < out_capacity) out_path[pos++] = '\\';
-                }
-            }
-
-            append(name);
-            out_path[pos] = '\0';
         }
     } // namespace native
 } // namespace fs

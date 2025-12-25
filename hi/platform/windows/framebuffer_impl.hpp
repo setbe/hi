@@ -15,11 +15,11 @@
 namespace hi {
     namespace native {
         // Helper: Color converter for Windows' GDI
-        static inline u32 RGBAtoBGRA(u32 color) noexcept {
-            u8 r = (color >> 16) & 0xFF;
-            u8 g = (color >> 8) & 0xFF;
-            u8 b = (color) & 0xFF;
-            u8 a = (color >> 24) & 0xFF;
+        static inline io::u32 RGBAtoBGRA(io::u32 color) noexcept {
+            io::u8 r = (color >> 16) & 0xFF;
+            io::u8 g = (color >> 8) & 0xFF;
+            io::u8 b = (color) & 0xFF;
+            io::u8 a = (color >> 24) & 0xFF;
             return (a << 24) | (r << 0) | (g << 8) | (b << 16);
         }
 
@@ -44,12 +44,12 @@ namespace hi {
             UpdateWindow(win.native().getHwnd());
         }
 
-        void Framebuffer::Clear(u32 rgba, int win_width, int win_height) const noexcept {
+        void Framebuffer::Clear(io::u32 rgba, int win_width, int win_height) const noexcept {
             if (!_pixels) return;
 
-            u32* pixels = static_cast<u32*>(_pixels);
+            io::u32* pixels = static_cast<io::u32*>(_pixels);
             const size_t count = static_cast<size_t>(win_width) * win_height;
-            const u32 bgra = RGBAtoBGRA(rgba);
+            const io::u32 bgra = RGBAtoBGRA(rgba);
 
             for (size_t i = 0; i < count; ++i)
                 pixels[i] = bgra;
@@ -127,15 +127,15 @@ namespace hi {
             return true;
         } // Framebuffer::Recreate
 
-        void Framebuffer::DrawPixel(int x, int y, int width, int height, u32 rgba_color) const noexcept {
+        void Framebuffer::DrawPixel(int x, int y, int width, int height, io::u32 rgba_color) const noexcept {
             // Defensive: don't draw out of bounds
             if (x < 0 || x >= width || y < 0 || y >= height || !_pixels)
                 return;
 
             // Each pixel is 4 bytes (BGRA32)
             const int pitch = width*4;
-            u8* dst = static_cast<u8*>(_pixels);
-            u32* pixel_ptr = reinterpret_cast<u32*>(dst + (y*pitch) + x*4);
+            io::u8* dst = static_cast<io::u8*>(_pixels);
+            io::u32* pixel_ptr = reinterpret_cast<io::u32*>(dst + (y*pitch) + x*4);
             *pixel_ptr = RGBAtoBGRA(rgba_color); // draw
         }
     } // namespace native

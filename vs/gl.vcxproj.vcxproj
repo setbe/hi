@@ -397,14 +397,14 @@
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <OutDir>$(SolutionDir)build\$(Configuration)\</OutDir>
-    <IntDir>$(SolutionDir)build\obj\la_$(Configuration)\</IntDir>
+    <IntDir>$(SolutionDir)build\obj\$(ProjectName)_$(Configuration)\</IntDir>
     <TargetName>$(ProjectName)_debug</TargetName>
     <ExternalIncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);</ExternalIncludePath>
     <LinkIncremental>false</LinkIncremental>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug_LegacyCXX|x64'">
     <OutDir>$(SolutionDir)build\$(Configuration)\</OutDir>
-    <IntDir>$(SolutionDir)build\obj\la_$(Configuration)\</IntDir>
+    <IntDir>$(SolutionDir)build\obj\$(ProjectName)_$(Configuration)\</IntDir>
     <TargetName>$(ProjectName)_debug_legacyCXX</TargetName>
     <ExternalIncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);</ExternalIncludePath>
     <LinkIncremental>false</LinkIncremental>
@@ -414,67 +414,67 @@
     <ExternalIncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);</ExternalIncludePath>
     <LinkIncremental>false</LinkIncremental>
     <OutDir>$(SolutionDir)build\$(Configuration)\</OutDir>
-    <IntDir>$(SolutionDir)build\obj\la_$(Configuration)\</IntDir>
+    <IntDir>$(SolutionDir)build\obj\$(ProjectName)_$(Configuration)\</IntDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug_LegacyCXX|Win32'">
     <TargetName>$(ProjectName)_debug_x86_legacyCXX</TargetName>
     <ExternalIncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);</ExternalIncludePath>
     <LinkIncremental>false</LinkIncremental>
-    <IntDir>$(SolutionDir)build\obj\la_$(Configuration)\</IntDir>
+    <IntDir>$(SolutionDir)build\obj\$(ProjectName)_$(Configuration)\</IntDir>
     <OutDir>$(SolutionDir)build\$(Configuration)\</OutDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <OutDir>$(SolutionDir)build\$(Configuration)\</OutDir>
-    <IntDir>$(SolutionDir)build\obj\la_$(Configuration)\</IntDir>
+    <IntDir>$(SolutionDir)build\obj\$(ProjectName)_$(Configuration)\</IntDir>
     <TargetName>$(ProjectName)</TargetName>
     <ExternalIncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);</ExternalIncludePath>
     <LinkIncremental>false</LinkIncremental>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release_LegacyCXX|x64'">
     <OutDir>$(SolutionDir)build\$(Configuration)\</OutDir>
-    <IntDir>$(SolutionDir)build\obj\la_$(Configuration)\</IntDir>
+    <IntDir>$(SolutionDir)build\obj\$(ProjectName)_$(Configuration)\</IntDir>
     <TargetName>$(ProjectName)_legacyCXX</TargetName>
     <ExternalIncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);</ExternalIncludePath>
     <LinkIncremental>false</LinkIncremental>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='ReleaseFreeStanding|x64'">
     <OutDir>$(SolutionDir)build\$(Configuration)\</OutDir>
-    <IntDir>$(SolutionDir)build\obj\la_$(Configuration)\</IntDir>
+    <IntDir>$(SolutionDir)build\obj\$(ProjectName)_$(Configuration)\</IntDir>
     <TargetName>$(ProjectName)_freestanding</TargetName>
     <ExternalIncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);</ExternalIncludePath>
     <LinkIncremental>false</LinkIncremental>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='ReleaseFreestanding_LegacyCXX|x64'">
     <OutDir>$(SolutionDir)build\$(Configuration)\</OutDir>
-    <IntDir>$(SolutionDir)build\obj\la_$(Configuration)\</IntDir>
+    <IntDir>$(SolutionDir)build\obj\$(ProjectName)_$(Configuration)\</IntDir>
     <TargetName>$(ProjectName)_freestanding_legacyCXX</TargetName>
     <ExternalIncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);</ExternalIncludePath>
     <LinkIncremental>false</LinkIncremental>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='DebugFreestanding_LegacyCXX|x64'">
     <OutDir>$(SolutionDir)build\$(Configuration)\</OutDir>
-    <IntDir>$(SolutionDir)build\obj\la_$(Configuration)\</IntDir>
+    <IntDir>$(SolutionDir)build\obj\$(ProjectName)_$(Configuration)\</IntDir>
     <TargetName>$(ProjectName)_freestanding_legacyCXX</TargetName>
     <ExternalIncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);</ExternalIncludePath>
     <LinkIncremental>false</LinkIncremental>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='ReleaseMini|x64'">
     <OutDir>$(SolutionDir)build\$(Configuration)\</OutDir>
-    <IntDir>$(SolutionDir)build\obj\la_$(Configuration)\</IntDir>
+    <IntDir>$(SolutionDir)build\obj\$(ProjectName)_$(Configuration)\</IntDir>
     <TargetName>$(ProjectName)_mini</TargetName>
     <ExternalIncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);</ExternalIncludePath>
     <LinkIncremental>false</LinkIncremental>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='ReleaseMiniConsole|x64'">
     <OutDir>$(SolutionDir)build\$(Configuration)\</OutDir>
-    <IntDir>$(SolutionDir)build\obj\la_$(Configuration)\</IntDir>
+    <IntDir>$(SolutionDir)build\obj\$(ProjectName)_$(Configuration)\</IntDir>
     <TargetName>$(ProjectName)_mini</TargetName>
     <ExternalIncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);</ExternalIncludePath>
     <LinkIncremental>false</LinkIncremental>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='ReleaseMini_LegacyCXX|x64'">
     <OutDir>$(SolutionDir)build\$(Configuration)\</OutDir>
-    <IntDir>$(SolutionDir)build\obj\la_$(Configuration)\</IntDir>
+    <IntDir>$(SolutionDir)build\obj\$(ProjectName)_$(Configuration)\</IntDir>
     <TargetName>$(ProjectName)_mini_legacyCXX</TargetName>
     <ExternalIncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);</ExternalIncludePath>
     <LinkIncremental>false</LinkIncremental>
@@ -483,56 +483,56 @@
     <TargetName>$(ProjectName)_x86</TargetName>
     <ExternalIncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);</ExternalIncludePath>
     <OutDir>$(SolutionDir)build\$(Configuration)\</OutDir>
-    <IntDir>$(SolutionDir)build\obj\la_$(Configuration)\</IntDir>
+    <IntDir>$(SolutionDir)build\obj\$(ProjectName)_$(Configuration)\</IntDir>
     <LinkIncremental>false</LinkIncremental>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release_LegacyCXX|Win32'">
     <TargetName>$(ProjectName)_x86_legacyCXX</TargetName>
     <ExternalIncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);</ExternalIncludePath>
     <OutDir>$(SolutionDir)build\$(Configuration)\</OutDir>
-    <IntDir>$(SolutionDir)build\obj\la_$(Configuration)\</IntDir>
+    <IntDir>$(SolutionDir)build\obj\$(ProjectName)_$(Configuration)\</IntDir>
     <LinkIncremental>false</LinkIncremental>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='ReleaseFreeStanding|Win32'">
     <TargetName>$(ProjectName)_x86_freestanding</TargetName>
     <ExternalIncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);</ExternalIncludePath>
     <OutDir>$(SolutionDir)build\$(Configuration)\</OutDir>
-    <IntDir>$(SolutionDir)build\obj\la_$(Configuration)\</IntDir>
+    <IntDir>$(SolutionDir)build\obj\$(ProjectName)_$(Configuration)\</IntDir>
     <LinkIncremental>false</LinkIncremental>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='ReleaseFreestanding_LegacyCXX|Win32'">
     <TargetName>$(ProjectName)_x86_freestanding_legacyCXX</TargetName>
     <ExternalIncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);</ExternalIncludePath>
     <OutDir>$(SolutionDir)build\$(Configuration)\</OutDir>
-    <IntDir>$(SolutionDir)build\obj\la_$(Configuration)\</IntDir>
+    <IntDir>$(SolutionDir)build\obj\$(ProjectName)_$(Configuration)\</IntDir>
     <LinkIncremental>false</LinkIncremental>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='DebugFreestanding_LegacyCXX|Win32'">
     <TargetName>$(ProjectName)_x86_freestanding_legacyCXX</TargetName>
     <ExternalIncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);</ExternalIncludePath>
     <OutDir>$(SolutionDir)build\$(Configuration)\</OutDir>
-    <IntDir>$(SolutionDir)build\obj\la_$(Configuration)\</IntDir>
+    <IntDir>$(SolutionDir)build\obj\$(ProjectName)_$(Configuration)\</IntDir>
     <LinkIncremental>false</LinkIncremental>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='ReleaseMini|Win32'">
     <TargetName>$(ProjectName)_mini_x86</TargetName>
     <ExternalIncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);</ExternalIncludePath>
     <OutDir>$(SolutionDir)build\$(Configuration)\</OutDir>
-    <IntDir>$(SolutionDir)build\obj\la_$(Configuration)\</IntDir>
+    <IntDir>$(SolutionDir)build\obj\$(ProjectName)_$(Configuration)\</IntDir>
     <LinkIncremental>false</LinkIncremental>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='ReleaseMiniConsole|Win32'">
     <TargetName>$(ProjectName)_mini_x86</TargetName>
     <ExternalIncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);</ExternalIncludePath>
     <OutDir>$(SolutionDir)build\$(Configuration)\</OutDir>
-    <IntDir>$(SolutionDir)build\obj\la_$(Configuration)\</IntDir>
+    <IntDir>$(SolutionDir)build\obj\$(ProjectName)_$(Configuration)\</IntDir>
     <LinkIncremental>false</LinkIncremental>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='ReleaseMini_LegacyCXX|Win32'">
     <TargetName>$(ProjectName)_mini_x86_legacyCXX</TargetName>
     <ExternalIncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);</ExternalIncludePath>
     <OutDir>$(SolutionDir)build\$(Configuration)\</OutDir>
-    <IntDir>$(SolutionDir)build\obj\la_$(Configuration)\</IntDir>
+    <IntDir>$(SolutionDir)build\obj\$(ProjectName)_$(Configuration)\</IntDir>
     <LinkIncremental>false</LinkIncremental>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">

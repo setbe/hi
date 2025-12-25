@@ -114,14 +114,14 @@ TEST_CASE("io::atomic fetch_or returns old and ORs", "[io][atomic]") {
 }
 
 TEST_CASE("io::atomic works with small integer types", "[io][atomic]") {
-    io::atomic<u32> a{ 1u };
+    io::atomic<io::u32> a{ 1u };
     REQUIRE(a.load() == 1u);
 
     auto old = a.fetch_add(2u);
     REQUIRE(old == 1u);
     REQUIRE(a.load() == 3u);
 
-    u32 expected = 3u;
+    io::u32 expected = 3u;
     REQUIRE(a.compare_exchange_strong(expected, 9u));
     REQUIRE(a.load() == 9u);
 }

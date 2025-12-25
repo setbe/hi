@@ -1,4 +1,6 @@
-#pragma once
+﻿#pragma once
+
+namespace io {
 
 // --- Includeless fixed-width integer types ---
 using i8 = signed char;
@@ -17,7 +19,6 @@ using u64 = unsigned long long;
 // --- Size and pointer-difference types (C++ freestanding replacements) ---
 using isize = decltype(static_cast<char*>(nullptr) - static_cast<char*>(nullptr));
 using usize = decltype(sizeof(0));
-
 
 #pragma region macros
 
@@ -113,137 +114,261 @@ namespace global {                                                \
 
 #pragma endregion // macros
 
-namespace io {
+IO_CONSTEXPR usize len(const char* s) noexcept {
+    if (!s) return 0; // avoid UB by returning 0 for null pointers
+    const char* p = s;
+    while (*p != char(0)) ++p;
+    return static_cast<usize>(p - s);
+}
+// ----------------- Basic SFINAE Primitives --------------------
 
-    IO_CONSTEXPR usize len(const char* s) noexcept {
-        if (!s) return 0; // avoid UB by returning 0 for null pointers
-        const char* p = s;
-        while (*p != char(0)) ++p;
-        return static_cast<usize>(p - s);
-    }
-    // ----------------- Basic SFINAE Primitives --------------------
+template<bool B, typename T = void> struct enable_if {};
 
-    template<bool B, typename T = void> struct enable_if {};
+template<typename T> struct enable_if<true, T> { using type = T; };
 
-    template<typename T> struct enable_if<true, T> { using type = T; };
+template<bool B, typename T = void>
+using enable_if_t = typename enable_if<B, T>::type;
 
-    template<bool B, typename T = void>
-    using enable_if_t = typename enable_if<B, T>::type;
+// ----------------- Constant / true/false types ----------------
 
-    // ----------------- Constant / true/false types ----------------
+template<typename T, T v>
+struct constant {
+    static IO_CONSTEXPR_VAR T value = v;
+    using type = constant;
+    IO_CONSTEXPR operator T() const noexcept { return value; }
+};
 
-    template<typename T, T v>
-    struct constant {
-        static IO_CONSTEXPR_VAR T value = v;
-        using type = constant;
-        IO_CONSTEXPR operator T() const noexcept { return value; }
-    };
+using true_t = constant<bool, true>;
+using false_t = constant<bool, false>;
 
-    using true_t = constant<bool, true>;
-    using false_t = constant<bool, false>;
+// ----------------------- is_same ------------------------------
 
-    // ----------------------- is_same ------------------------------
+template<typename A, typename B>
+struct is_same : false_t {};
 
-    template<typename A, typename B>
-    struct is_same : false_t {};
+template<typename A>
+struct is_same<A, A> : true_t {};
 
-    template<typename A>
-    struct is_same<A, A> : true_t {};
+template<typename A, typename B>
+IO_CONSTEXPR_VAR bool is_same_v = is_same<A, B>::value;
 
-    template<typename A, typename B>
-    IO_CONSTEXPR_VAR bool is_same_v = is_same<A, B>::value;
+// ------------------------ void_t -----------------------------
 
-    // ------------------------ void_t -----------------------------
+template<typename...>
+using void_t = void;
 
-    template<typename...>
-    using void_t = void;
-
-    // -------- Convenience macro for enabling functions -----------
+// -------- Convenience macro for enabling functions -----------
 
 #define IO_REQUIRES(...) typename = enable_if_t<(__VA_ARGS__)>
 #define IO_REQUIRES_T(...) enable_if_t<(__VA_ARGS__), int> = 0
 
-    // -------------------- remove_reference --------------------
-    template<typename T> struct remove_reference { using type = T; };
-    template<typename T> struct remove_reference<T&> { using type = T; };
-    template<typename T> struct remove_reference<T&&> { using type = T; };
+// -------------------- remove_reference --------------------
+template<typename T> struct remove_reference { using type = T; };
+template<typename T> struct remove_reference<T&> { using type = T; };
+template<typename T> struct remove_reference<T&&> { using type = T; };
 
-    template<typename T>
-    using remove_reference_t = typename remove_reference<T>::type;
+template<typename T>
+using remove_reference_t = typename remove_reference<T>::type;
 
-    // ---------------------- move, forward ------------------------
-    
-    template<typename T>
-    IO_CONSTEXPR remove_reference_t<T>&& move(T&& t) noexcept { return static_cast<remove_reference_t<T>&&>(t); }
-    template<typename T>
-    IO_CONSTEXPR T&& forward(remove_reference_t<T>& t) noexcept { return static_cast<T&&>(t); }
-    template<typename T>
-    IO_CONSTEXPR T&& forward(remove_reference_t<T>&& t) noexcept { return static_cast<T&&>(t); }
+// ---------------------- move, forward ------------------------
+
+template<typename T>
+IO_CONSTEXPR remove_reference_t<T>&& move(T&& t) noexcept { return static_cast<remove_reference_t<T>&&>(t); }
+template<typename T>
+IO_CONSTEXPR T&& forward(remove_reference_t<T>& t) noexcept { return static_cast<T&&>(t); }
+template<typename T>
+IO_CONSTEXPR T&& forward(remove_reference_t<T>&& t) noexcept { return static_cast<T&&>(t); }
 
 
-    // ============================================================
-    //                   universal view (like span)
-    // ============================================================
-    template<typename T>
-    struct view {
-        using value_type = T;
+// ============================================================
+//                   universal view (like span)
+// ============================================================
+template<typename T>
+struct view {
+    using value_type = T;
 
-        // -------------------- Constructors ---------------------------------
+    // -------------------- Constructors ---------------------------------
 
-        // 1. Default
-        IO_CONSTEXPR view() noexcept : _ptr(nullptr), _len(0) {}
+    // 1. Default
+    IO_CONSTEXPR view() noexcept : _ptr(nullptr), _len(0) {}
 
-        // 2. Raw pointer + length
-        IO_CONSTEXPR view(T* ptr, usize len) noexcept : _ptr(ptr), _len(len) {}
+    // 2. Raw pointer + length
+    IO_CONSTEXPR view(T* ptr, usize len) noexcept : _ptr(ptr), _len(len) {}
 
-        // 3a) From C-array (generic, but NOT for const char)
-        template<usize N, typename U = T,
-            IO_REQUIRES(!is_same_v<U, const char>)>
-        IO_CONSTEXPR view(U(&arr)[N]) noexcept : _ptr(arr), _len(N) {}
+    // 3a) From C-array (generic, but NOT for const char)
+    template<usize N, typename U = T,
+        IO_REQUIRES(!is_same_v<U, const char>)>
+    IO_CONSTEXPR view(U(&arr)[N]) noexcept : _ptr(arr), _len(N) {}
 
-        // 3b) From char literal / char array for const char: trim '\0' if present
-        template<usize N, typename U = T,
-            IO_REQUIRES(is_same_v<U, const char>)>
-        IO_CONSTEXPR view(const char(&arr)[N]) noexcept : _ptr(arr),
-            _len((N&& arr[N - 1] == '\0') ? (N - 1) : N) {}
+    // 3b) From char literal / char array for const char: trim '\0' if present
+    template<usize N, typename U = T,
+        IO_REQUIRES(is_same_v<U, const char>)>
+    IO_CONSTEXPR view(const char(&arr)[N]) noexcept : _ptr(arr),
+        _len((N&& arr[N - 1] == '\0') ? (N - 1) : N) {}
 
-        // -------------------- Access / Info -------------------------------
+    // -------------------- Access / Info -------------------------------
 
-        IO_CONSTEXPR T& operator[](usize i) const noexcept { return _ptr[i]; }
-        IO_CONSTEXPR T* data()    const noexcept { return _ptr; }
-        IO_CONSTEXPR usize size() const noexcept { return _len; }
-        IO_CONSTEXPR bool empty() const noexcept { return _len == 0; }
+    IO_CONSTEXPR T& operator[](usize i) const noexcept { return _ptr[i]; }
+    IO_CONSTEXPR T* data()    const noexcept { return _ptr; }
+    IO_CONSTEXPR usize size() const noexcept { return _len; }
+    IO_CONSTEXPR bool empty() const noexcept { return _len == 0; }
+    inline operator bool() const noexcept { return data() && !empty(); }
 
-        // -------------------- Iteration -----------------------------------
+    // -------------------- Iteration -----------------------------------
 
-        IO_CONSTEXPR T* begin() const noexcept { return _ptr; }
-        IO_CONSTEXPR T* end()   const noexcept { return _ptr + _len; }
+    IO_CONSTEXPR T* begin() const noexcept { return _ptr; }
+    IO_CONSTEXPR T* end()   const noexcept { return _ptr + _len; }
 
-        // -------------------- Convenience operations ----------------------
+    // -------------------- Convenience operations ----------------------
 
-        IO_CONSTEXPR T& front() const noexcept { return _ptr[0]; }
-        IO_CONSTEXPR T& back()  const noexcept { return _ptr[_len - 1]; }
+    IO_CONSTEXPR T& front() const noexcept { return _ptr[0]; }
+    IO_CONSTEXPR T& back()  const noexcept { return _ptr[_len - 1]; }
 
-        IO_CONSTEXPR view first(usize n) const noexcept { return view(_ptr, (n <= _len ? n : _len)); }
-        IO_CONSTEXPR view last(usize n) const noexcept { return view(_ptr + (_len>n ? _len-n : 0), (n<=_len ? n : _len)); }
-        IO_CONSTEXPR view drop(usize n) const noexcept { if (n >= _len) return view(); return view(_ptr + n, _len - n); }
-        IO_CONSTEXPR view slice(usize pos, usize count) const noexcept {
-            if (pos >= _len) return view();
-            usize r = (_len - pos);
-            if (count < r) r = count;
-            return view(_ptr + pos, r);
+    IO_CONSTEXPR view first(usize n) const noexcept { return view(_ptr, (n <= _len ? n : _len)); }
+    IO_CONSTEXPR view last(usize n) const noexcept { return view(_ptr + (_len>n ? _len-n : 0), (n<=_len ? n : _len)); }
+    IO_CONSTEXPR view drop(usize n) const noexcept { if (n >= _len) return view(); return view(_ptr + n, _len - n); }
+    IO_CONSTEXPR view slice(usize pos, usize count) const noexcept {
+        if (pos >= _len) return view();
+        usize r = (_len - pos);
+        if (count < r) r = count;
+        return view(_ptr + pos, r);
+    }
+    IO_CONSTEXPR view subview(usize pos, usize count) const noexcept { return slice(pos, count); }
+
+    // -------------------- find (string-like) --------------------------
+
+    static constexpr usize npos = static_cast<usize>(-1);
+
+    // 1) find single value
+    IO_CONSTEXPR usize find(const T& value, usize pos = 0) const noexcept {
+        if (pos >= _len) return npos;
+        for (usize i = pos; i < _len; ++i) {
+            if (_ptr[i] == value)
+                return i;
         }
-        IO_CONSTEXPR view subview(usize pos, usize count) const noexcept { return slice(pos, count); }
+        return npos;
+    }
 
-    protected:
-        T* _ptr;
-        usize _len;
-    };
+    // 2) find sub-view
+    IO_CONSTEXPR usize find(view needle, usize pos = 0) const noexcept {
+        if (needle._len == 0)
+            return pos <= _len ? pos : npos;
 
-    // --- convenience aliases ---
-    using char_view = view<const char>;
-    using byte_view = view<const u8>;
+        if (needle._len > _len || pos > _len - needle._len)
+            return npos;
+
+        for (usize i = pos; i <= _len - needle._len; ++i) {
+            usize j = 0;
+            for (; j < needle._len; ++j) {
+                if (!(_ptr[i + j] == needle._ptr[j]))
+                    break;
+            }
+            if (j == needle._len)
+                return i;
+        }
+        return npos;
+    }
+
+    // 3) find raw pointer + length (convenience)
+    IO_CONSTEXPR usize find(const T* needle, usize needle_len, usize pos = 0) const noexcept {
+        if (!needle)
+            return npos;
+        return find(view(needle, needle_len), pos);
+    }
+
+    // -------------------- Comparisons ---------------------------
+
+    // view == view
+    friend IO_CONSTEXPR bool operator==(view<T> a, view<T> b) noexcept {
+        if (a._len != b._len) return false;
+        for (usize i = 0; i < a._len; ++i) {
+            if (!(a._ptr[i] == b._ptr[i])) return false;
+        }
+        return true;
+    }
+    friend IO_CONSTEXPR bool operator!=(view a, view b) noexcept { return !(a == b); }
+
+    // char_view == literal   (only for const char views)
+    template<usize N, typename U = T, IO_REQUIRES(is_same_v<U, const char>)>
+    friend IO_CONSTEXPR bool operator==(view a, const char(&lit)[N]) noexcept {
+        return a == view(lit); // твоїй ctor already trims '\0'
+    }
+    template<usize N, typename U = T, IO_REQUIRES(is_same_v<U, const char>)>
+    friend IO_CONSTEXPR bool operator!=(view a, const char(&lit)[N]) noexcept {
+        return !(a == lit);
+    }
+
+    template<usize N, typename U = T, IO_REQUIRES(is_same_v<U, const char>)>
+    friend IO_CONSTEXPR bool operator==(const char(&lit)[N], view b) noexcept {
+        return b == lit;
+    }
+    template<usize N, typename U = T, IO_REQUIRES(is_same_v<U, const char>)>
+    friend IO_CONSTEXPR bool operator!=(const char(&lit)[N], view b) noexcept {
+        return !(b == lit);
+    }
+
+protected:
+    T* _ptr;
+    usize _len;
+}; // struct view<T>
+
+// ---------------- convenience aliases -----------------------
+
+using char_view = view<const char>;
+using byte_view = view<const u8>;
+
 } // namespace io
+
+
+
+namespace io {
+    
+    template<usize N>
+    IO_NODISCARD IO_CONSTEXPR io::char_view u8view(const char(&s)[N]) noexcept {
+        // N includes '\0'
+        return io::char_view{ s, N ? (N - 1) : 0 };
+    }
+
+#if defined(__cpp_char8_t) && __cpp_char8_t >= 201811L
+    template<usize N>
+    IO_NODISCARD IO_CONSTEXPR io::char_view u8view(const char8_t(&s)[N]) noexcept {
+        return io::char_view{
+            reinterpret_cast<const char*>(s),
+            N ? (N - 1) : 0
+        };
+    }
+#endif
+
+} // namespace io
+
+/*
+    Usage:
+        io::char_view name = IO_U8("тест_файл.txt");
+        io::File f(name, io::OpenMode::Write);
+
+    IO_U8("...") — UTF-8 string literal -> io::char_view (NO strlen, NO allocation)
+
+    Why this exists:
+
+    C++ has two different behaviors for UTF-8 literals:
+    - C++17 and earlier:  u8"..." has type: const char[N]
+    - C++20+:             u8"..." has type: const char8_t[N]
+
+    Framework uses UTF-8 everywhere as `io::char_view`
+    (pointer + explicit length, NOT zero-terminated).
+
+    This helper:
+    - converts both `char[N]` and `char8_t[N]`
+    - keeps the length known at compile-time
+    - avoids strlen()
+    - avoids implicit encoding assumptions
+
+    IMPORTANT:
+    - This is SAFE: UTF-8 code units are 1 byte by definition.
+    - reinterpret_cast is used ONLY to unify char8_t -> char.
+    - The returned view is valid for the lifetime of the literal.
+*/
+#define IO_U8(s) ::io::u8view(u8##s)
 
 
 

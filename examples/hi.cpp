@@ -3,3 +3,4 @@
 #include "tests/containers.hpp"
 #include "tests/syscalls.hpp"
 #include "tests/filesystem.hpp"
+#include "tests/file.hpp"

@@ -74,7 +74,7 @@ reinterpret_cast<_RetType(GL_CALLING_CONVENTION)_ProcT>(::gl::loader("gl" #_Name
 namespace gl {
 
 #pragma region Types
-    using Enum = u32;
+    using Enum = io::u32;
     using Boolean = unsigned char;
 
     // A singleton (instead of an enum class) that contains bit-mask constants
@@ -96,26 +96,26 @@ namespace gl {
         IO_CONSTEXPR_VAR static int Color = 0x00004000;
     } BufferBit;
 
-    enum class Face : u32 {
+    enum class Face : io::u32 {
         Front = 0x404,
         Back = 0x405,
         FrontAndBack = 0x408,
     };
 
-    enum class Polygon : u32 {
+    enum class Polygon : io::u32 {
         Point = 0x1B00,
         Line = 0x1B01,
         Fill = 0x1B02,
     };
 
-    enum class Capability : u32 {
+    enum class Capability : io::u32 {
         Blend = 0x0BE2,
         CullFace = 0x0B44,
         DepthTest = 0x0B71,
         // others
     };
 
-    enum class BlendFactor : u32 {
+    enum class BlendFactor : io::u32 {
         Zero = 0,
         One = 1,
         SrcAlpha = 0x0302,
@@ -123,12 +123,12 @@ namespace gl {
         // others
     };
 
-    enum class TextureTarget : u32 {
+    enum class TextureTarget : io::u32 {
         Texture2D = 0xDE1,
         // others
     };
 
-    enum class TextureParam : u32 {
+    enum class TextureParam : io::u32 {
         MinFilter = 0x2801,
         MagFilter = 0x2800,
         WrapS = 0x2802,
@@ -136,21 +136,21 @@ namespace gl {
         // others
     };
 
-    enum class TextureFormat : u32 {
+    enum class TextureFormat : io::u32 {
         RGBA = 0x1908,
         RGB = 0x1907,
     };
 
-    enum class DataType : u32 {
+    enum class DataType : io::u32 {
         UnsignedByte = 0x1401,
     };
 
-    enum class GetParam : u32 {
+    enum class GetParam : io::u32 {
         Viewport = 0x0BA2,
         // others
     };
 
-    enum class PrimitiveMode : u32 {
+    enum class PrimitiveMode : io::u32 {
         Triangles = 0x0004,
         TriangleStrip = 0x0005,
         Lines = 0x0001,
@@ -159,7 +159,7 @@ namespace gl {
         // others
     };
 
-    enum class DrawElementsType : u32 {
+    enum class DrawElementsType : io::u32 {
         Byte = 0x1400,
         UnsignedByte = 0x1401,
         Short = 0x1402,
@@ -169,7 +169,7 @@ namespace gl {
         Float = 0x1406,
     };
     IO_CONSTEXPR IO_NODISCARD
-    u32 getDrawElementsTypeSize(DrawElementsType type) noexcept {
+    io::u32 getDrawElementsTypeSize(DrawElementsType type) noexcept {
         switch (type) {
         case DrawElementsType::Byte:          IO_FALLTHROUGH;
         case DrawElementsType::UnsignedByte:  return 1;
@@ -182,31 +182,31 @@ namespace gl {
         }
     }
 
-    enum class BufferTarget : u32 {
+    enum class BufferTarget : io::u32 {
         ArrayBuffer = 0x8892,
         ElementArrayBuffer = 0x8893,
         UniformBuffer = 0x8A11,
         // others
     };
 
-    enum class BufferUsage : u32 {
+    enum class BufferUsage : io::u32 {
         StaticDraw = 0x88E4,
         DynamicDraw = 0x88E8,
         StreamDraw = 0x88E0
     };
 
-    enum class ShaderType : u32 {
+    enum class ShaderType : io::u32 {
         VertexShader = 0x8B31,
         FragmentShader = 0x8B30,
         // others
     };
 
-    enum class ProgramProperty : u32 {
+    enum class ProgramProperty : io::u32 {
         LinkStatus = 0x8B82,
         InfoLogLength = 0x8B84
     };
 
-    enum class ShaderProperty : u32 {
+    enum class ShaderProperty : io::u32 {
         CompileStatus = 0x8B81,
         InfoLogLength = 0x8B84
     };
@@ -229,29 +229,29 @@ namespace gl {
     GL_CALL_CUSTOM(
         /*     name */ CullFace,
         /* ret    T */ void,
-        /* proc   T */ (u32),
+        /* proc   T */ (io::u32),
         /*     decl */ (Face face),
-        /*     pass */ (static_cast<u32>(face)))
+        /*     pass */ (static_cast<io::u32>(face)))
 
     GL_CALL_CUSTOM(PolygonMode, void,
-        /* proc   T */ (u32, u32),
+        /* proc   T */ (io::u32, io::u32),
         /*     decl */ (Face face, Polygon mode),
-        /*     pass */ (static_cast<u32>(face), static_cast<u32>(mode)))
+        /*     pass */ (static_cast<io::u32>(face), static_cast<io::u32>(mode)))
 
     GL_CALL_CUSTOM(TexParameterf, void,
-        /* proc   T */ (u32, u32, float),
+        /* proc   T */ (io::u32, io::u32, float),
         /*     decl */ (TextureTarget target, TextureParam pname, float param),
-        /*     pass */ (static_cast<u32>(target), static_cast<u32>(pname), param))
+        /*     pass */ (static_cast<io::u32>(target), static_cast<io::u32>(pname), param))
 
     GL_CALL_CUSTOM(TexParameteri, void,
-        /* proc   T */ (u32, u32, int),
+        /* proc   T */ (io::u32, io::u32, int),
         /*     decl */ (TextureTarget target, TextureParam pname, int param),
-        /*     pass */ (static_cast<u32>(target), static_cast<u32>(pname), param))
+        /*     pass */ (static_cast<io::u32>(target), static_cast<io::u32>(pname), param))
 
     GL_CALL_CUSTOM(TexImage2D, void,
-        /* proc   T */ (u32,
+        /* proc   T */ (io::u32,
             int, int, int, int, int,
-            u32, u32,
+            io::u32, io::u32,
             const void*),
         /*     decl */ (TextureTarget target,
             int level, int internalformat,
@@ -260,11 +260,11 @@ namespace gl {
             DataType type,
             const void* pixels),
         /*      pass */ (
-            static_cast<u32>(target),
+            static_cast<io::u32>(target),
             level, internalformat,
             width, height, border,
-            static_cast<u32>(format),
-            static_cast<u32>(type),
+            static_cast<io::u32>(format),
+            static_cast<io::u32>(type),
             pixels))
 
     // ----------------------------------------------------------------------------
@@ -289,8 +289,8 @@ namespace gl {
     //   • The stencil buffer may contain leftover stencil masks.
     // ----------------------------------------------------------------------------
     GL_CALL_CUSTOM(Clear, void,
-        /* proc   T */ (u32),
-        /*     decl */ (u32 mask),
+        /* proc   T */ (io::u32),
+        /*     decl */ (io::u32 mask),
         /*     pass */ (mask))
 
     GL_CALL_CUSTOM(ClearColor, void,
@@ -299,28 +299,28 @@ namespace gl {
         /*     pass */ (r, g, b, a))
 
     GL_CALL_CUSTOM(Disable, void,
-        /* proc   T */ (u32),
+        /* proc   T */ (io::u32),
         /*     decl */ (Capability cap),
-        /*     pass */ (static_cast<u32>(cap)))
+        /*     pass */ (static_cast<io::u32>(cap)))
 
     GL_CALL_CUSTOM(Enable, void,
-        /* proc   T */ (u32),
+        /* proc   T */ (io::u32),
         /*     decl */ (Capability cap),
-        /*     pass */ (static_cast<u32>(cap)))
+        /*     pass */ (static_cast<io::u32>(cap)))
 
     GL_CALL_CUSTOM(BlendFunc, void,
-        /* proc   T */ (u32, u32),
+        /* proc   T */ (io::u32, io::u32),
         /*     decl */ (BlendFactor sfactor, BlendFactor dfactor),
-        /*     pass */ (static_cast<u32>(sfactor), static_cast<u32>(dfactor)))
+        /*     pass */ (static_cast<io::u32>(sfactor), static_cast<io::u32>(dfactor)))
 
     GL_CALL_CUSTOM(GetFloatv, void,
-        /* proc   T */ (u32, float*),
+        /* proc   T */ (io::u32, float*),
         /*     decl */ (GetParam pname, float* data),
-        /*     pass */ (static_cast<u32>(pname), data))
+        /*     pass */ (static_cast<io::u32>(pname), data))
 
     GL_CALL_CUSTOM(GetString, const unsigned char*,
-        /* proc   T */ (u32),
-        /*     decl */ (u32 name),
+        /* proc   T */ (io::u32),
+        /*     decl */ (io::u32 name),
         /*     pass */ (name))
 
     GL_CALL_CUSTOM(Viewport, void,
@@ -336,33 +336,33 @@ namespace gl {
     // ----------------------------------------------------------------------------
 
     GL_CALL_CUSTOM(DrawArrays, void,
-        /* proc   T */ (u32, int, int),
+        /* proc   T */ (io::u32, int, int),
         /*     decl */ (PrimitiveMode mode, int first, int count),
-        /*     pass */ (static_cast<u32>(mode), first, count))
+        /*     pass */ (static_cast<io::u32>(mode), first, count))
 
     GL_CALL_CUSTOM(DrawElements, void,
-        /* proc   T */ (u32, int, u32, const void*),
+        /* proc   T */ (io::u32, int, io::u32, const void*),
         /*     decl */ (PrimitiveMode mode, int count, DrawElementsType type, const void* indices),
         /*     pass */ (
-            static_cast<u32>(mode),
+            static_cast<io::u32>(mode),
             count,
-            static_cast<u32>(type),
+            static_cast<io::u32>(type),
             indices
             ))
 
     GL_CALL_CUSTOM(BindTexture, void,
-        /* proc   T */ (u32, u32),
-        /*     decl */ (TextureTarget target, u32 texture),
-        /*     pass */ (static_cast<u32>(target), texture))
+        /* proc   T */ (io::u32, io::u32),
+        /*     decl */ (TextureTarget target, io::u32 texture),
+        /*     pass */ (static_cast<io::u32>(target), texture))
 
     GL_CALL_CUSTOM(DeleteTextures, void,
-        /* proc   T */ (int, const u32*),
-        /*     decl */ (int n, const u32* textures),
+        /* proc   T */ (int, const io::u32*),
+        /*     decl */ (int n, const io::u32* textures),
         /*     pass */ (n, textures))
 
     GL_CALL_CUSTOM(GenTextures, void,
-        /* proc   T */ (int, u32*),
-        /*     decl */ (int n, u32* textures),
+        /* proc   T */ (int, io::u32*),
+        /*     decl */ (int n, io::u32* textures),
         /*     pass */ (n, textures))
 #pragma endregion
 
@@ -373,9 +373,9 @@ namespace gl {
     // ----------------------------------------------------------------------------
 
     GL_CALL_CUSTOM(ActiveTexture, void,
-        /* proc   T */ (u32),
+        /* proc   T */ (io::u32),
         /*     decl */ (TextureTarget texture),
-        /*     pass */ (static_cast<u32>(texture)))
+        /*     pass */ (static_cast<io::u32>(texture)))
 #pragma endregion
 
 
@@ -385,35 +385,35 @@ namespace gl {
     // ----------------------------------------------------------------------------
 
     GL_CALL_CUSTOM(BindBuffer, void,
-        /* proc   T */ (u32, u32),
-        /*     decl */ (BufferTarget target, u32 buffer),
-        /*     pass */ (static_cast<u32>(target), buffer))
+        /* proc   T */ (io::u32, io::u32),
+        /*     decl */ (BufferTarget target, io::u32 buffer),
+        /*     pass */ (static_cast<io::u32>(target), buffer))
 
     GL_CALL_CUSTOM(DeleteBuffers, void,
-        /* proc   T */ (int, const u32*),
-        /*     decl */ (int n, const u32* buffers),
+        /* proc   T */ (int, const io::u32*),
+        /*     decl */ (int n, const io::u32* buffers),
         /*     pass */ (n, buffers))
 
     GL_CALL_CUSTOM(GenBuffers, void,
-        /* proc   T */ (int, u32*),
-        /*     decl */ (int n, u32* buffers),
+        /* proc   T */ (int, io::u32*),
+        /*     decl */ (int n, io::u32* buffers),
         /*     pass */ (n, buffers))
 
     GL_CALL_CUSTOM(BufferData, void,
-        /* proc   T */ (u32, intptr_t, const void*, u32),
+        /* proc   T */ (io::u32, intptr_t, const void*, io::u32),
         /*     decl */ (BufferTarget target, intptr_t size, const void* data, BufferUsage usage),
         /*     pass */ (
-            static_cast<u32>(target),
+            static_cast<io::u32>(target),
             size,
             data,
-            static_cast<u32>(usage)
+            static_cast<io::u32>(usage)
             ))
 
     GL_CALL_CUSTOM(BufferSubData, void,
-        /* proc   T */ (u32, intptr_t, intptr_t, const void*),
+        /* proc   T */ (io::u32, intptr_t, intptr_t, const void*),
         /*     decl */ (BufferTarget target, intptr_t offset, intptr_t size, const void* data),
         /*     pass */ (
-            static_cast<u32>(target),
+            static_cast<io::u32>(target),
             offset,
             size,
             data
@@ -427,78 +427,78 @@ namespace gl {
     // ----------------------------------------------------------------------------
     
     GL_CALL_CUSTOM(AttachShader, void,
-        /* proc   T */ (u32, u32),
-        /*     decl */ (u32 program, u32 shader),
+        /* proc   T */ (io::u32, io::u32),
+        /*     decl */ (io::u32 program, io::u32 shader),
         /*     pass */ (program, shader))
     
     GL_CALL_CUSTOM(CompileShader, void,
-        /* proc   T */ (u32),
-        /*     decl */ (u32 shader),
+        /* proc   T */ (io::u32),
+        /*     decl */ (io::u32 shader),
         /*     pass */ (shader))
     
-    GL_CALL_CUSTOM(CreateProgram, u32,
+    GL_CALL_CUSTOM(CreateProgram, io::u32,
         /* proc   T */ (void),
         /*     decl */ (),
         /*     pass */ ())
     
-    GL_CALL_CUSTOM(CreateShader, u32,
-        /* proc   T */ (u32),
+    GL_CALL_CUSTOM(CreateShader, io::u32,
+        /* proc   T */ (io::u32),
         /*     decl */ (ShaderType type),
-        /*     pass */ (static_cast<u32>(type)))
+        /*     pass */ (static_cast<io::u32>(type)))
     
     GL_CALL_CUSTOM(DeleteProgram, void,
-        /* proc   T */ (u32),
-        /*     decl */ (u32 program),
+        /* proc   T */ (io::u32),
+        /*     decl */ (io::u32 program),
         /*     pass */ (program))
     
     GL_CALL_CUSTOM(DeleteShader, void,
-        /* proc   T */ (u32),
-        /*     decl */ (u32 shader),
+        /* proc   T */ (io::u32),
+        /*     decl */ (io::u32 shader),
         /*     pass */ (shader))
     
     GL_CALL_CUSTOM(EnableVertexAttribArray, void,
-        /* proc   T */ (u32),
-        /*     decl */ (u32 index),
+        /* proc   T */ (io::u32),
+        /*     decl */ (io::u32 index),
         /*     pass */ (index))
     
     GL_CALL_CUSTOM(GetProgramiv, void,
-        /* proc   T */ (u32, u32, int*),
-        /*     decl */ (u32 program, ProgramProperty pname, int* params),
-        /*     pass */ (program, static_cast<u32>(pname), params))
+        /* proc   T */ (io::u32, io::u32, int*),
+        /*     decl */ (io::u32 program, ProgramProperty pname, int* params),
+        /*     pass */ (program, static_cast<io::u32>(pname), params))
     
     GL_CALL_CUSTOM(GetProgramInfoLog, void,
-        /* proc   T */ (u32, int, int*, char*),
-        /*     decl */ (u32 program, int bufSize, int* length, char* infoLog),
+        /* proc   T */ (io::u32, int, int*, char*),
+        /*     decl */ (io::u32 program, int bufSize, int* length, char* infoLog),
         /*     pass */ (program, bufSize, length, infoLog))
     
     GL_CALL_CUSTOM(GetShaderiv, void,
-        /* proc   T */ (u32, u32, int*),
-        /*     decl */ (u32 shader, ShaderProperty pname, int* params),
-        /*     pass */ (shader, static_cast<u32>(pname), params))
+        /* proc   T */ (io::u32, io::u32, int*),
+        /*     decl */ (io::u32 shader, ShaderProperty pname, int* params),
+        /*     pass */ (shader, static_cast<io::u32>(pname), params))
     
     GL_CALL_CUSTOM(GetShaderInfoLog, void,
-        /* proc   T */ (u32, int, int*, char*),
-        /*     decl */ (u32 shader, int bufSize, int* length, char* infoLog),
+        /* proc   T */ (io::u32, int, int*, char*),
+        /*     decl */ (io::u32 shader, int bufSize, int* length, char* infoLog),
         /*     pass */ (shader, bufSize, length, infoLog))
     
     GL_CALL_CUSTOM(GetUniformLocation, int,
-        /* proc   T */ (u32, const char*),
-        /*     decl */ (u32 program, const char* name),
+        /* proc   T */ (io::u32, const char*),
+        /*     decl */ (io::u32 program, const char* name),
         /*     pass */ (program, name))
     
     GL_CALL_CUSTOM(LinkProgram, void,
-        /* proc   T */ (u32),
-        /*     decl */ (u32 program),
+        /* proc   T */ (io::u32),
+        /*     decl */ (io::u32 program),
         /*     pass */ (program))
     
     GL_CALL_CUSTOM(ShaderSource, void,
-        /* proc   T */ (u32, int, const char* const*, const int*),
-        /*     decl */ (u32 shader, int count, const char* const* strings, const int* lengths),
+        /* proc   T */ (io::u32, int, const char* const*, const int*),
+        /*     decl */ (io::u32 shader, int count, const char* const* strings, const int* lengths),
         /*     pass */ (shader, count, strings, lengths))
     
     GL_CALL_CUSTOM(UseProgram, void,
-        /* proc   T */ (u32),
-        /*     decl */ (u32 program),
+        /* proc   T */ (io::u32),
+        /*     decl */ (io::u32 program),
         /*     pass */ (program))
     
     GL_CALL_CUSTOM(Uniform1i, void,
@@ -512,9 +512,9 @@ namespace gl {
         /*     pass */ (location, count, Boolean{ transpose }, value))
     
     GL_CALL_CUSTOM(VertexAttribPointer, void,
-        /* proc   T */ (u32, int, u32, unsigned char, int, const void*),
-        /*     decl */ (u32 index, int size, DrawElementsType type, bool normalized, int stride, const void* pointer),
-        /*     pass */ (index, size, static_cast<u32>(type), Boolean{ normalized }, stride, pointer))
+        /* proc   T */ (io::u32, int, io::u32, unsigned char, int, const void*),
+        /*     decl */ (io::u32 index, int size, DrawElementsType type, bool normalized, int stride, const void* pointer),
+        /*     pass */ (index, size, static_cast<io::u32>(type), Boolean{ normalized }, stride, pointer))
 #pragma endregion
 
 
@@ -525,34 +525,34 @@ namespace gl {
     // ----------------------------------------------------------------------------
 
     GL_CALL_CUSTOM(BindBufferBase, void,
-        /* proc   T */ (u32, u32, u32),
-        /*     decl */ (BufferTarget target, u32 index, u32 buffer),
-        /*     pass */ (static_cast<u32>(target), index, buffer))
+        /* proc   T */ (io::u32, io::u32, io::u32),
+        /*     decl */ (BufferTarget target, io::u32 index, io::u32 buffer),
+        /*     pass */ (static_cast<io::u32>(target), index, buffer))
 
     GL_CALL_CUSTOM(VertexAttribIPointer, void,
-        /* proc   T */ (u32, int, u32, int, const void*),
-        /*     decl */ (u32 index, int size, DrawElementsType type, int stride, const void* pointer),
-        /*     pass */ (index, size, static_cast<u32>(type), stride, pointer))
+        /* proc   T */ (io::u32, int, io::u32, int, const void*),
+        /*     decl */ (io::u32 index, int size, DrawElementsType type, int stride, const void* pointer),
+        /*     pass */ (index, size, static_cast<io::u32>(type), stride, pointer))
 
     GL_CALL_CUSTOM(BindVertexArray, void,
-        /* proc   T */ (u32),
-        /*     decl */ (u32 _array),
+        /* proc   T */ (io::u32),
+        /*     decl */ (io::u32 _array),
         /*     pass */ (_array))
 
     GL_CALL_CUSTOM(DeleteVertexArrays, void,
-        /* proc   T */ (int, const u32*),
-        /*     decl */ (int n, const u32* arrays),
+        /* proc   T */ (int, const io::u32*),
+        /*     decl */ (int n, const io::u32* arrays),
         /*     pass */ (n, arrays))
 
     GL_CALL_CUSTOM(GenVertexArrays, void,
-        /* proc   T */ (int, u32*),
-        /*     decl */ (int n, u32* arrays),
+        /* proc   T */ (int, io::u32*),
+        /*     decl */ (int n, io::u32* arrays),
         /*     pass */ (n, arrays))
 #pragma endregion
 
     struct Shader {
     private:
-        u32 _id_program{ 0 };
+        io::u32 _id_program{ 0 };
 
     public:
         // Check compile status with `.failed()`
@@ -562,9 +562,9 @@ namespace gl {
             int success;
             char info[512];
 #endif
-            u32 V; // 1. Vertex shader
-            u32 F; // 2. Fragment shader
-            u32 P; // 3. shader Program
+            io::u32 V; // 1. Vertex shader
+            io::u32 F; // 2. Fragment shader
+            io::u32 P; // 3. shader Program
             // 1. vertex shader
             V = CreateShader(ShaderType::VertexShader);
             ShaderSource(V, 1, &vert, nullptr);
@@ -626,7 +626,7 @@ namespace gl {
         Shader(Shader&&) = delete;
         Shader& operator=(Shader&&) = delete;
 
-        inline u32 id() const noexcept { return _id_program; }
+        inline io::u32 id() const noexcept { return _id_program; }
         inline bool failed() const noexcept { return _id_program == 0; }
 
         inline void Use() const noexcept { UseProgram(_id_program); }
@@ -702,27 +702,27 @@ public:
 };
 
 template<typename T> struct DrawElementsTypeOf;
-template<> struct DrawElementsTypeOf<i8> { static IO_CONSTEXPR_VAR DrawElementsType value = DrawElementsType::Byte; };
-template<> struct DrawElementsTypeOf<u8> { static IO_CONSTEXPR_VAR DrawElementsType value = DrawElementsType::UnsignedByte; };
-template<> struct DrawElementsTypeOf<i16> { static IO_CONSTEXPR_VAR DrawElementsType value = DrawElementsType::Short; };
-template<> struct DrawElementsTypeOf<u16> { static IO_CONSTEXPR_VAR DrawElementsType value = DrawElementsType::UnsignedShort; };
-template<> struct DrawElementsTypeOf<i32> { static IO_CONSTEXPR_VAR DrawElementsType value = DrawElementsType::Int; };
-template<> struct DrawElementsTypeOf<u32> { static IO_CONSTEXPR_VAR DrawElementsType value = DrawElementsType::UnsignedInt; };
+template<> struct DrawElementsTypeOf<io::i8> { static IO_CONSTEXPR_VAR DrawElementsType value = DrawElementsType::Byte; };
+template<> struct DrawElementsTypeOf<io::u8> { static IO_CONSTEXPR_VAR DrawElementsType value = DrawElementsType::UnsignedByte; };
+template<> struct DrawElementsTypeOf<io::i16> { static IO_CONSTEXPR_VAR DrawElementsType value = DrawElementsType::Short; };
+template<> struct DrawElementsTypeOf<io::u16> { static IO_CONSTEXPR_VAR DrawElementsType value = DrawElementsType::UnsignedShort; };
+template<> struct DrawElementsTypeOf<io::i32> { static IO_CONSTEXPR_VAR DrawElementsType value = DrawElementsType::Int; };
+template<> struct DrawElementsTypeOf<io::u32> { static IO_CONSTEXPR_VAR DrawElementsType value = DrawElementsType::UnsignedInt; };
 template<> struct DrawElementsTypeOf<float> { static IO_CONSTEXPR_VAR DrawElementsType value = DrawElementsType::Float; };
 
 struct Attr {
 private:
-    u32 _amount;
+    io::u32 _amount;
     DrawElementsType _type;
 
 public:
     // amount_of_components e.g. 3 for vec3
     // gl_type: Byte, UnsignedByte, Short, UnsignedShort, Int, UnsignedInt, Float.    
-    IO_CONSTEXPR Attr(u32 amount_of_components, DrawElementsType gl_type = DrawElementsType::Float) noexcept
+    IO_CONSTEXPR Attr(io::u32 amount_of_components, DrawElementsType gl_type = DrawElementsType::Float) noexcept
         : _amount{ amount_of_components }, _type{ gl_type } {}
 
     // amount of components, e.g. 3 for vec3
-    IO_NODISCARD IO_CONSTEXPR u32 amount() const noexcept { return _amount; }
+    IO_NODISCARD IO_CONSTEXPR io::u32 amount() const noexcept { return _amount; }
     IO_NODISCARD IO_CONSTEXPR DrawElementsType type() const noexcept { return _type; }
     IO_NODISCARD IO_CONSTEXPR int size() const noexcept {
         return amount() * getDrawElementsTypeSize(type()); // e.g. `3 * sizeof(float)`
@@ -730,7 +730,7 @@ public:
 };
 
 template<typename T>
-IO_CONSTEXPR const Attr AttrOf(u32 amount) noexcept {
+IO_CONSTEXPR const Attr AttrOf(io::u32 amount) noexcept {
     return Attr(amount, DrawElementsTypeOf<T>::value);
 }
 
@@ -741,7 +741,7 @@ struct MeshBinder {
         const io::view<const Attr>& attrs
     ) noexcept
     {
-        u32 index, stride;
+        io::u32 index, stride;
         size_t offset = 0;
         index = stride = 0;
 

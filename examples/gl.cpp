@@ -1,6 +1,7 @@
 #include "../hi/window.hpp"
 #include "../hi/filesystem.hpp"
 #include "../hi/native/containers.hpp"
+#include "../hi/native/file.hpp"
 
 struct MainWindow : public hi::Window<MainWindow> {
     MainWindow() noexcept {
@@ -10,12 +11,12 @@ struct MainWindow : public hi::Window<MainWindow> {
 
     void onRender() noexcept override {
         static double red = 0.;
-        static double begin = io::monotonic_seconds();
-        static double end = begin;
-        end = io::monotonic_seconds();
-        
-        red += end - begin;
-        begin = end;
+        static double now = io::monotonic_seconds();
+        static double prev = now;
+        prev = io::monotonic_seconds();
+
+        red += prev - now;
+        now = prev;
         if (red > 1.) red = 0.;
 
         gl::ClearColor(static_cast<float>(red), 0.f, 0.f, 0.f);
