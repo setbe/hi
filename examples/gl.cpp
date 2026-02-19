@@ -1,27 +1,24 @@
-#include "../hi/window.hpp"
-#include "../hi/filesystem.hpp"
-#include "../hi/native/containers.hpp"
-#include "../hi/native/file.hpp"
+﻿#define IO_IMPLEMENTATION
+#include "../hi/hi.hpp"
 
 struct MainWindow : public hi::Window<MainWindow> {
     MainWindow() noexcept {
-        this->setTitle("My Window");
-        this->setApi(hi::RendererApi::Opengl);
+        this->setTitle(IO_U8("Hello World! Привіт Світе!"));
+        this->setApi(hi::RendererApi::Opengl, 2, 0);
     }
 
     void onRender() noexcept override {
-        static double red = 0.;
-        static double now = io::monotonic_seconds();
-        static double prev = now;
-        prev = io::monotonic_seconds();
+        using io::u64;
+        static float red = 0.;
+        red += .0001f;
+        if (red > 1.f) red = 0.f;
 
-        red += prev - now;
-        now = prev;
-        if (red > 1.) red = 0.;
+        gl::ClearColor(red, 0.f, 0.f, 0.f);
+        gl::Clear(gl::buffer_bit.Color | gl::buffer_bit.Depth);
+    }
 
-        gl::ClearColor(static_cast<float>(red), 0.f, 0.f, 0.f);
-        gl::Clear(gl::BufferBit.Color | gl::BufferBit.Depth);
-        this->SwapBuffers();
+    void onError(hi::Error err, hi::AboutError ae) noexcept override {
+        setTitle(hi::what(ae));
     }
 }; // struct MainWindow
 
@@ -30,6 +27,7 @@ int main() {
 
     while (win.PollEvents()) {
         win.Render();
+        win.SwapBuffers();
     }
     io::exit_process(0);
 }

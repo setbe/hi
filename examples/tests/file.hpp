@@ -1,7 +1,4 @@
-﻿#include "../../hi/native/file.hpp"
-#include "../../hi/native/containers.hpp"
-#include "../../hi/filesystem.hpp"     // fs::exists/remove/rename/file_size/current_directory/create_directory/directory_iterator
-#include "../../hi/io.hpp"
+﻿#include "../../hi/io.hpp"
 #include "catch.hpp"
 
 // These tests double as documentation.
@@ -36,7 +33,7 @@ namespace test_file {
     // because current working directory may differ between IDE and CI runners.
     static io::string make_path(io::char_view name) noexcept {
         io::string dir{};
-        REQUIRE(fs::current_directory(dir));
+        REQUIRE(io::current_directory(dir));
 
         io::string p{};
         REQUIRE(p.append(dir.as_view()));
@@ -65,9 +62,9 @@ namespace test_file {
         io::string p{};
         if (!p.append(path)) return;
 
-        if (!fs::exists(p)) return;
+        if (!io::exists(p)) return;
 
-        if (!fs::remove(p)) {
+        if (!io::remove(p)) {
             io::out << "[cleanup] couldn't remove: " << p << io::out.endl;
         }
     }
@@ -99,7 +96,7 @@ TEST_CASE("io::File RAII: close on destruction (file can be reopened)", "[io::Fi
         REQUIRE(f.write_str("abc"));
     } // destructor must close the underlying OS handle
 
-    REQUIRE(fs::exists(path));
+    REQUIRE(io::exists(path));
 
     io::File r(path.as_view(), io::OpenMode::Read);
     REQUIRE(r.is_open());
@@ -138,7 +135,7 @@ TEST_CASE("io::File write/read_all + size()", "[io::File]") {
     REQUIRE(got == "hello world");
 
     // Cross-check the platform filesystem layer too.
-    REQUIRE(fs::file_size(path) == 11);
+    REQUIRE(io::file_size(path) == 11);
 
     cleanup_path(path.as_view());
 }
@@ -239,7 +236,7 @@ TEST_CASE("io::File read_line handles LF and CRLF", "[io::File]") {
     cleanup_path(path.as_view());
 }
 
-TEST_CASE("fs::rename + fs::remove with io::File", "[io::File][fs]") {
+TEST_CASE("io::rename + io::remove with io::File", "[io::File][io]") {
     const io::char_view a = "io_file_test_rename_a.txt";
     const io::char_view b = "io_file_test_rename_b.txt";
 
@@ -256,18 +253,18 @@ TEST_CASE("fs::rename + fs::remove with io::File", "[io::File][fs]") {
         REQUIRE(f.write_str("data"));
     }
 
-    REQUIRE(fs::exists(pa));
-    REQUIRE_FALSE(fs::exists(pb));
+    REQUIRE(io::exists(pa));
+    REQUIRE_FALSE(io::exists(pb));
 
-    REQUIRE(fs::rename(pa, pb));
+    REQUIRE(io::rename(pa, pb));
 
-    REQUIRE_FALSE(fs::exists(pa));
-    REQUIRE(fs::exists(pb));
+    REQUIRE_FALSE(io::exists(pa));
+    REQUIRE(io::exists(pb));
 
     REQUIRE(read_all_file(pb.as_view()) == "data");
 
-    REQUIRE(fs::remove(pb));
-    REQUIRE_FALSE(fs::exists(pb));
+    REQUIRE(io::remove(pb));
+    REQUIRE_FALSE(io::exists(pb));
 
     cleanup_path(pa.as_view());
     cleanup_path(pb.as_view());
@@ -285,10 +282,7 @@ TEST_CASE("io::File move semantics (move-construct + move-assign)", "[io::File]"
     REQUIRE(a.write_str("hello"));
 
     io::File b(static_cast<io::File&&>(a)); // move-construct
-    IO_DIAG_ALL_PUSH();
-    IO_DIAG_DISABLE_USE_AFTER_MOVE();
     REQUIRE_FALSE(a.is_open());
-    IO_DIAG_ALL_POP();
 
     REQUIRE(b.is_open());
     REQUIRE(b.write_str(" world"));
@@ -296,10 +290,7 @@ TEST_CASE("io::File move semantics (move-construct + move-assign)", "[io::File]"
 
     io::File c;
     c = static_cast<io::File&&>(b); // move-assign
-    IO_DIAG_ALL_PUSH();
-    IO_DIAG_DISABLE_USE_AFTER_MOVE();
     REQUIRE_FALSE(b.is_open());
-    IO_DIAG_ALL_POP();
 
     REQUIRE(c.is_open());
     c.close();
@@ -327,7 +318,7 @@ TEST_CASE("io::File supports UTF-8 paths (Cyrillic)", "[io::File][unicode]") {
         REQUIRE(f.write_str("hello"));
     }
 
-    REQUIRE(fs::exists(path));
+    REQUIRE(io::exists(path));
     REQUIRE(read_all_file(path.as_view()) == "hello");
 
     cleanup_path(path.as_view());
@@ -345,12 +336,12 @@ TEST_CASE("io::File UTF-8 path with spaces and diacritics", "[io::File][unicode]
         REQUIRE(f.write_str("data"));
     }
 
-    REQUIRE(fs::file_size(path) == 4);
+    REQUIRE(io::file_size(path) == 4);
 
     cleanup_path(path.as_view());
 }
 
-TEST_CASE("directory_iterator works with UTF-8 names", "[fs][unicode]") {
+TEST_CASE("directory_iterator works with UTF-8 names", "[io][unicode]") {
     const io::char_view dir_name = IO_U8("тест_каталог");
     const io::char_view file_name = IO_U8("файл.txt");
 
@@ -358,11 +349,11 @@ TEST_CASE("directory_iterator works with UTF-8 names", "[fs][unicode]") {
 
     // Best-effort cleanup. Directory removal might fail if it's not empty,
     // so we remove the file first later and then remove the directory.
-    // (If your fs::remove() supports directories, this will work; otherwise
-    // you may need fs::remove_directory().)
-    fs::remove(dir_path);
+    // (If your io::remove() supports directories, this will work; otherwise
+    // you may need io::remove_directory().)
+    io::remove(dir_path);
 
-    bool created = fs::create_directory(dir_path);
+    bool created = io::create_directory(dir_path);
     if (!created && !dir_path.empty())
         io::out << "Couldn't create dir: " << dir_path << io::out.endl;
     REQUIRE(created);
@@ -382,7 +373,7 @@ TEST_CASE("directory_iterator works with UTF-8 names", "[fs][unicode]") {
     }
 
     bool found = false;
-    for (fs::directory_iterator it{ dir_path.as_view() }; !it.is_end(); ++it) {
+    for (io::directory_iterator it{ dir_path.as_view() }; !it.is_end(); ++it) {
         // it->path is io::char_view.
         if (it->path.data() && it->path.find(file_name) != io::char_view::npos) {
             found = true;
@@ -393,7 +384,7 @@ TEST_CASE("directory_iterator works with UTF-8 names", "[fs][unicode]") {
 
     // Cleanup: delete file then directory.
     cleanup_path(file_path.as_view());
-    fs::remove(dir_path);
+    io::remove(dir_path);
 }
 
 } // namespace

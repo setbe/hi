@@ -2,7 +2,7 @@
 #define CATCH_CONFIG_MAIN
 #include "catch.hpp"
 
-#include "../../hi/native/containers.hpp"
+#include "../../hi/io.hpp"
 
 // ---------- helper: lifetime tracker ----------
 struct Tracker {

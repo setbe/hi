@@ -1,47 +1,63 @@
-#include "../hi/io.hpp"
+#define IO_IMPLEMENTATION
+#include "../hi/socket.hpp"
+
+using Loop = io::EventLoop<1200, 2048>;
+
+static void on_established(void*, io::Endpoint peer, io::u32 sid) {
+    io::out << "ESTABLISHED peer=" << peer << " sid=" << sid << '\n' << io::out.endl;
+}
+
+static void on_packet(void* ud, io::Endpoint from, io::u8 type, io::UdpChan chan, io::byte_view payload) {
+    auto* loop = (Loop*)ud;
+
+    io::out << "PKT type=" << (io::u32)type
+        << " chan=" << (io::u32)chan
+        << " bytes=" << (io::u32)payload.size()
+        << " from " << from << '\n' << io::out.endl;
+
+    // user packets only (example: type>=32)
+    if (type < 32) return;
+
+    auto* ps = loop->find_peer(from);
+    if (!ps || ps->hs != Loop::udp_peer_state::HS_ESTABLISHED) return;
+
+    (void)loop->send_to_peer(from, type, chan, payload, io::monotonic_ms());
+}
+
+static void on_drop(void*, io::Endpoint from, io::Error why) {
+    io::out << "DROP from " << from << " err=" << (io::u32)why << '\n' << io::out.endl;
+}
+
+static void on_disconnect(void*, io::Endpoint peer, io::u32 /*session_id*/, io::DisconnectReason why) {
+    io::out << "DISCONNECT peer=" << peer << " why=" << (io::u32)why << '\n' << io::out.endl;
+}
+
 
 int main() {
-    io::EventLoop loop;
+    io::Socket udp{};
+    if (!udp.open(io::Protocol::UDP)) return 1;
 
-    // --- Listener ---
-    io::Socket listener_sock;
-    listener_sock.open(io::Protocol::TCP);
-    listener_sock.bind(io::IP::from_string("127.0.0.1"), io::htons(5000));
-    listener_sock.listen(8);
+    io::Endpoint bind_ep{};
+    bind_ep.addr_be = io::IP::from_string("0.0.0.0");
+    bind_ep.port_be = io::htons(7777);
+    if (!udp.bind(bind_ep)) return 2;
+    (void)udp.set_blocking(false);
 
-    io::AsyncListener listener;
-    listener.init(listener_sock);
-    loop.add(&listener);
+    Loop loop{};
+    if (!loop.init(/*is_server=*/true)) return 3;
 
-    // client array (stack-based)
-    io::AsyncSocket clients[8] = {};
-    char client_bufs[8][256] = {};
-    int client_count = 0;
+    constexpr io::usize RECV_BUF_SIZE = 2048;
+    io::unique_bytes recv_buf{ (io::u8*)io::alloc(RECV_BUF_SIZE)};
+    if (!recv_buf.get()) return 4;
 
-    auto on_accept = [&](io::Socket& client) {
-        if (client_count >= 8) return; // max clients
-        io::out << "Client connected!" << io::out.endl;
+    io::UdpCallbacks cb{};
+    cb.on_packet = &on_packet;
+    cb.on_drop = &on_drop;
+    cb.on_established = &on_established;
+    cb.on_disconnect = &on_disconnect;
+    cb.ud = &loop;
 
-        io::AsyncSocket& c = clients[client_count];
-        c.init(client);
-        loop.add(&c);
-
-        char* buf = client_bufs[client_count];
-        int idx = client_count;
-        client_count++;
-
-        auto on_recv = [&](void*, int n, io::Error e) {
-            if (e == io::Error::None) {
-                buf[n] = 0;
-                io::out << "Client: " << buf << io::out.endl;
-                c.async_recv(buf, sizeof(client_bufs[idx]) - 1, on_recv);
-            }
-        };
-
-        c.async_recv(buf, sizeof(client_bufs[idx]) - 1, on_recv);
-    };
-
-    listener.async_accept(on_accept);
-
-    loop.run();
+    io::out << "server started on :7777\n" << io::out.endl;
+    loop.run_udp(udp, cb, recv_buf.get(), RECV_BUF_SIZE);
+    return 0;
 }

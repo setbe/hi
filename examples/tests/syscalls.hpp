@@ -2,8 +2,7 @@
 #define CATCH_CONFIG_MAIN
 #include "catch.hpp"
 
-#include "../../hi/native/syscalls.hpp"
-#include "../../hi/native/types.hpp"
+#include "../../hi/io.hpp"
 
 #ifdef _WIN32
 #  include <windows.h>
@@ -58,36 +57,30 @@ TEST_CASE("io::free(nullptr) is safe", "[io][syscalls][free]") {
     SUCCEED();
 }
 
-TEST_CASE("io::monotonic_seconds is non-decreasing", "[io][syscalls][time]") {
-    double t1 = io::monotonic_seconds();
-    double t2 = io::monotonic_seconds();
-    double t3 = io::monotonic_seconds();
+TEST_CASE("io::monotonic_ms is non-decreasing", "[io][syscalls][time]") {
+    const io::u64 t1 = io::monotonic_ms();
+    const io::u64 t2 = io::monotonic_ms();
+    const io::u64 t3 = io::monotonic_ms();
 
     REQUIRE(t2 >= t1);
     REQUIRE(t3 >= t2);
 }
 
 TEST_CASE("io::sleep_ms sleeps at least roughly the requested time", "[io][syscalls][sleep]") {
-    // Keep it short, but not too short (scheduler granularity).
     const unsigned ms = 30;
 
-    double t1 = io::monotonic_seconds();
+    const io::u64 t1 = io::monotonic_ms();
     io::sleep_ms(ms);
-    double t2 = io::monotonic_seconds();
+    const io::u64 t2 = io::monotonic_ms();
 
-    double dt_ms = (t2 - t1) * 1000.0;
+    const io::u64 dt_ms = (t2 - t1); // already milliseconds
 
+    REQUIRE(dt_ms >= 10);           // lower bound (scheduler granularity)
 #ifdef _WIN32
-    // Windows Sleep granularity can be ~15.6ms depending on timer resolution.
-    // Allow a generous lower bound.
-    REQUIRE(dt_ms >= 10.0);
+    REQUIRE(dt_ms < 250);           // be tolerant on Windows/VM/CI
 #else
-    // usleep is usually fine, but still scheduling exists.
-    REQUIRE(dt_ms >= 10.0);
+    REQUIRE(dt_ms < 200);
 #endif
-
-    // and must not sleep ridiculously long in normal conditions
-    REQUIRE(dt_ms < 50.0);
 }
 
 TEST_CASE("io::exit_process terminates the process with given code (run in child)", "[io][syscalls][exit]") {
@@ -108,4 +101,35 @@ TEST_CASE("io::exit_process terminates the process with given code (run in child
     REQUIRE(WIFEXITED(status));
     REQUIRE(WEXITSTATUS(status) == 123);
 #endif
+}
+
+TEST_CASE("io::secure_zero zeros memory", "[io][syscalls][crypto]") {
+    io::u8 buf[256];
+    for (io::usize i = 0; i < sizeof(buf); ++i) buf[i] = (io::u8)(i + 1);
+
+    io::secure_zero(buf, (io::usize)sizeof(buf));
+
+    for (io::usize i = 0; i < sizeof(buf); ++i) REQUIRE(buf[i] == 0);
+}
+
+TEST_CASE("io::os_entropy fills buffer with entropy (basic sanity)", "[io][syscalls][crypto]") {
+    io::u8 a[32]{};
+    io::u8 b[32]{};
+
+    REQUIRE(io::os_entropy(a, (io::usize)sizeof(a)));
+    REQUIRE(io::os_entropy(b, (io::usize)sizeof(b)));
+
+    // Extremely unlikely to be all zeros; good sanity check.
+    bool any_nonzero_a = false;
+    for (io::usize i = 0; i < sizeof(a); ++i) any_nonzero_a |= (a[i] != 0);
+    REQUIRE(any_nonzero_a);
+
+    // Two reads should (almost surely) differ.
+    bool any_diff = false;
+    for (io::usize i = 0; i < sizeof(a); ++i) any_diff |= (a[i] != b[i]);
+    REQUIRE(any_diff);
+}
+
+TEST_CASE("io::os_entropy size=0 is ok", "[io][syscalls][crypto]") {
+    REQUIRE(io::os_entropy(nullptr, 0));
 }

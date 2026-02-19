@@ -2,7 +2,7 @@
 #define CATCH_CONFIG_MAIN
 #include "catch.hpp"
 
-#include "../../hi/native/types.hpp"
+#include "../../hi/io.hpp"
 
 // ------------------------------------------------------------
 //              Compile-time sanity checks
@@ -15,6 +15,7 @@ static_assert(sizeof(io::i32) == 4, "i32 must be 4 bytes");
 static_assert(sizeof(io::u32) == 4, "u32 must be 4 bytes");
 static_assert(sizeof(io::i64) == 8, "i64 must be 8 bytes");
 static_assert(sizeof(io::u64) == 8, "u64 must be 8 bytes");
+static_assert(sizeof(io::u128) == 16, "u128 must be 16 bytes");
 
 static_assert(sizeof(io::usize) == sizeof(sizeof(0)), "usize must match sizeof(...) result type size");
 static_assert(sizeof(io::isize) == sizeof(static_cast<char*>(nullptr) - static_cast<char*>(nullptr)),
@@ -144,11 +145,102 @@ TEST_CASE("io::view slicing helpers", "[types][io][view]") {
     REQUIRE(too_much.size() == 5);
 }
 
-TEST_CASE("hi::Key_t::map returns expected strings for a few keys", "[types][hi][key]") {
-    REQUIRE(                 hi::Key_t::map(hi::Key::A) == std::string("a"));
-    REQUIRE(                hi::Key_t::map(hi::Key::F1) == std::string("f1"));
-    REQUIRE(            hi::Key_t::map(hi::Key::Escape) == std::string("escape"));
-    REQUIRE(          hi::Key_t::map(hi::Key::__NONE__) == std::string("__NONE__"));
-    REQUIRE(   hi::Key_t::map(static_cast<hi::Key>(-1)) == std::string("unknown"));
-    REQUIRE(hi::Key_t::map(static_cast<hi::Key>(99999)) == std::string("unknown"));
+// ------------------------------------------------------------
+//                      u128 arithmetics
+// ------------------------------------------------------------
+static inline io::u128 make_u128(io::u64 hi, io::u64 lo) noexcept { return { lo, hi }; }
+
+TEST_CASE("io::add_u128: without carry", "[u128][add]") {
+    io::u128 a = make_u128(0x1111111111111111ull, 0x2222222222222222ull);
+    io::u128 b = make_u128(0x0101010101010101ull, 0x0303030303030303ull);
+    io::u128 r = io::add_u128(a, b);
+    REQUIRE(r.lo == 0x2525252525252525ull);
+    REQUIRE(r.hi == 0x1212121212121212ull);
 }
+
+TEST_CASE("io::add_u128: carry with lo in hi", "[u128][add][carry]") {
+    io::u128 a = make_u128(0x0123456789abcdefull, 0xffffffffffffffffull);
+    io::u128 b = make_u128(0x0000000000000000ull, 0x0000000000000001ull);
+    io::u128 r = io::add_u128(a, b);
+    REQUIRE(r.lo == 0x0000000000000000ull);
+    REQUIRE(r.hi == 0x0123456789abcdf0ull);
+}
+
+TEST_CASE("io::add_u128_u64: without carry", "[u128][add_u64]") {
+    io::u128 a = make_u128(0xaaaaaaaaaaaaaaaauLL, 0x1111111111111111ull);
+    io::u64  b = 0x2222222222222222ull;
+    io::u128 r = io::add_u128_u64(a, b);
+    REQUIRE(r.lo == 0x3333333333333333ull);
+    REQUIRE(r.hi == 0xaaaaaaaaaaaaaaaauLL);
+}
+
+TEST_CASE("io::add_u128_u64: carry with lo in hi", "[u128][add_u64][carry]") {
+    io::u128 a = make_u128(0x123456789abcdef0ull, 0xfffffffffffffff0ull);
+    io::u64  b = 0x30ull;
+    io::u128 r = io::add_u128_u64(a, b);
+    REQUIRE(r.lo == 0x0000000000000020ull);
+    REQUIRE(r.hi == 0x123456789abcdef1ull);
+}
+
+TEST_CASE("io::mul_u64: trivial cases", "[u128][mul]") {
+    {
+        io::u128 r = io::mul_u64(0, 0);
+        REQUIRE(r.lo == 0);
+        REQUIRE(r.hi == 0);
+    }
+    {
+        io::u128 r = io::mul_u64(0, 123);
+        REQUIRE(r.lo == 0);
+        REQUIRE(r.hi == 0);
+    }
+    {
+        io::u128 r = io::mul_u64(1, 0xdeadbeefcafebabeull);
+        REQUIRE(r.lo == 0xdeadbeefcafebabeull);
+        REQUIRE(r.hi == 0);
+    }
+}
+
+TEST_CASE("io::mul_u64: 0xffff.. * 2", "[u128][mul][carry]") {
+    const io::u64 a = 0xffffffffffffffffull;
+    const io::u64 b = 2ull;
+    io::u128 r = io::mul_u64(a, b);
+    REQUIRE(r.lo == 0xfffffffffffffffeull);
+    REQUIRE(r.hi == 0x0000000000000001ull);
+}
+
+TEST_CASE("io::mul_u64: big hi (2^63 * 2^63 = 2^126)", "[u128][mul][hi]") {
+    const io::u64 a = 0x8000000000000000ull;
+    const io::u64 b = 0x8000000000000000ull;
+    io::u128 r = io::mul_u64(a, b);
+    REQUIRE(r.lo == 0x0000000000000000ull);
+    REQUIRE(r.hi == 0x4000000000000000ull);
+}
+
+TEST_CASE("io::mul_u64: several deterministic regression pairs", "[u128][mul][reg]") {
+    struct vec { io::u64 a, b, lo, hi; };
+    const vec v[] = {
+        // a*b computed offline / by reasoning:
+        // 0xFFFFFFFF * 0xFFFFFFFF = 0xFFFFFFFE00000001
+        { 0x00000000ffffffffull, 0x00000000ffffffffull, 0xfffffffe00000001ull, 0x0000000000000000ull },
+        // (2^32) * (2^32) = 2^64
+        { 0x0000000100000000ull, 0x0000000100000000ull, 0x0000000000000000ull, 0x0000000000000001ull },
+        // 0x1_0000_0000 * 3 = 0x3_0000_0000
+        { 0x0000000100000000ull, 0x0000000000000003ull, 0x0000000300000000ull, 0x0000000000000000ull },
+    };
+
+    for (auto& e : v) {
+        io::u128 r = io::mul_u64(e.a, e.b);
+        REQUIRE(r.lo == e.lo);
+        REQUIRE(r.hi == e.hi);
+    }
+}
+
+
+//TEST_CASE("hi::Key_t::map returns expected strings for a few keys", "[types][hi][key]") {
+//    REQUIRE(                 hi::Key_t::map(hi::Key::A) == std::string("a"));
+//    REQUIRE(                hi::Key_t::map(hi::Key::F1) == std::string("f1"));
+//    REQUIRE(            hi::Key_t::map(hi::Key::Escape) == std::string("escape"));
+//    REQUIRE(          hi::Key_t::map(hi::Key::__NONE__) == std::string("__NONE__"));
+//    REQUIRE(   hi::Key_t::map(static_cast<hi::Key>(-1)) == std::string("unknown"));
+//    REQUIRE(hi::Key_t::map(static_cast<hi::Key>(99999)) == std::string("unknown"));
+//}

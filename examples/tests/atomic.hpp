@@ -2,7 +2,7 @@
 #define CATCH_CONFIG_MAIN
 #include "catch.hpp"
 
-#include "../../hi/native/atomic.hpp"
+#include "../../hi/io.hpp"
 
 TEST_CASE("io::atomic default ctor loads default-initialized value", "[io][atomic]") {
     io::atomic<int> a{};

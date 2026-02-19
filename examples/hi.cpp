@@ -1,3 +1,4 @@
+#define IO_IMPLEMENTATION
 #include "tests/types.hpp"
 #include "tests/atomic.hpp"
 #include "tests/containers.hpp"

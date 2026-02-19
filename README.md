@@ -12,10 +12,9 @@ It is a foundation for systems-level software.
 ## Design Goals
 
 - No dependency on the C++ Standard Library containers or strings
-- Freestanding-friendly (custom allocators, no implicit CRT usage)
+- Freestanding-friendly (custom allocators, no CRT usage)
 - Explicit ownership and lifetime semantics
 - Minimal abstractions with predictable cost
-- Clear OS boundary (`native/` vs `platform/`)
 - Suitable for GUI frameworks, engines, and low-level tools
 
 ---
@@ -23,39 +22,8 @@ It is a foundation for systems-level software.
 ## Non-Goals
 
 - STL compatibility or drop-in replacements;
-- Maximum performance via heavy templates;
-- Automatic memory management;
-- Cross-platform portability at any cost;
-- Header-only convenience abstractions.
 
 ---
-
-## Project Structure
-
-```text
-hi/
-├── native/                 # Platform-agnostic low-level APIs
-│   ├── atomic.hpp          # Freestanding atomic wrapper
-│   ├── containers.hpp      # vector, deque, list, basic_string<char / wchar_t>
-│   ├── filesystem.hpp      # Native filesystem interface
-│   ├── syscalls.hpp        # OS syscalls (alloc, sleep, exit, time)
-│   ├── out.hpp             # Output stream
-│   ├── gl_loader.hpp       # OpenGL loader and gl::Functions
-│   ├── socket.hpp          # Async client/listener
-│   │   ..........
-│   └── types.hpp           # Fixed-width and core types
-│
-├── platform/
-│   └── windows/
-│       ├── filesystem_impl.hpp
-│       ├── window_impl.hpp
-│       ├── opengl_impl.hpp       # OpenGL handler and context creation
-│       └── framebuffer_impl.hpp  # Software renderer via OS
-│
-├── filesystem.hpp          # High-level filesystem API
-├── io.hpp                  # General header for everything that `native` dir has
-└── window.hpp              # Window + event loop abstraction
-```
 
 ## Core Components
 
@@ -77,12 +45,6 @@ Unified string implementation:
 ```cpp
 io::string   // UTF-8 string
 io::wstring  // wide string (UTF-16 on Windows)
-```
-
-Both are implemented as:
-
-```cpp
-io::basic_string<CharT>
 ```
 
 Key properties:
@@ -122,7 +84,8 @@ OS syscalls:
 - alloc / free
 - exit_process
 - sleep_ms
-- monotonic_seconds
+- monotonic_ms
+- secure_zero
 
 ## Windowing & Rendering
 
@@ -136,7 +99,7 @@ Example:
 ```cpp
 struct MainWindow : public hi::Window<MainWindow> {
     void onRender() noexcept override {
-        gl::Clear(gl::BufferBit::Color);
+        gl::Clear(gl::buffer_bit.Color);
         this->SwapBuffers();
     }
 };
@@ -159,8 +122,6 @@ Tests are designed to catch lifetime bugs and ABI-level issues, not just logic e
 - Windows (primary target)
 - Linux (in progress)
 - Android (in planning)
-
-The codebase is structured to allow additional platforms without affecting core APIs.
 
 ## Philosophy
 

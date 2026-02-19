@@ -2,16 +2,13 @@
 #define CATCH_CONFIG_MAIN
 #include "catch.hpp"
 
-#include "../../hi/filesystem.hpp"
-#include "../../hi/native/file.hpp"        // io::File
-#include "../../hi/native/containers.hpp"  // io::string, io::vector, io::char_view
-#include "../../hi/io.hpp"                 // io::out
+#include "../../hi/io.hpp"
 
 // ============================================================
 // Filesystem tests.
 //
 // Philosophy:
-// - Tests are API documentation: use only hi-level io::File + fs::* wrappers.
+// - Tests are API documentation: use only hi-level io::File + io::* wrappers.
 // - Prefer io::char_view everywhere to avoid hidden strlen/temporary allocations.
 // - Keep path construction readable: split/join instead of manual slash checks.
 // ============================================================
@@ -23,7 +20,7 @@ namespace test_fs {
     // - Windows accepts both '/' and '\\' in most APIs.
     // - Linux uses '/'.
     //
-    // If you want 100% canonical output across platforms, make fs normalize separators.
+    // If you want 100% canonical output across platforms, make io normalize separators.
 #ifdef _WIN32
     static const io::char_view kSep = { "\\", 1 };
 #else
@@ -88,14 +85,14 @@ namespace test_fs {
 
     // Make a temporary directory under the current working directory so we don't need OS APIs.
     // We rely only on:
-    // - fs::current_directory
-    // - fs::create_directory
-    // - fs::remove
+    // - io::current_directory
+    // - io::create_directory
+    // - io::remove
     //
     // Directory name uses a monotonic counter to avoid collisions.
     static io::string make_temp_dir() noexcept {
         io::string cwd{};
-        REQUIRE(fs::current_directory(cwd));
+        REQUIRE(io::current_directory(cwd));
         REQUIRE(!cwd.empty());
 
         static io::atomic<io::u64> g{ 1 };
@@ -113,11 +110,11 @@ namespace test_fs {
         REQUIRE(path_join(cwd.as_view(), leaf.as_view(), dir));
 
         // Best-effort cleanup in case a previous crashed run left it behind.
-        if (fs::exists(dir)) (void)fs::remove(dir);
+        if (io::exists(dir)) (void)io::remove(dir);
 
-        REQUIRE(fs::create_directory(dir));
-        REQUIRE(fs::exists(dir));
-        REQUIRE(fs::is_directory(dir));
+        REQUIRE(io::create_directory(dir));
+        REQUIRE(io::exists(dir));
+        REQUIRE(io::is_directory(dir));
 
         return dir;
     }
@@ -125,9 +122,9 @@ namespace test_fs {
     // Best-effort remove: do not hard-fail tests just because the file is locked by AV/indexer.
     // Instead, print a message so the user understands what happened.
     static void cleanup_path(io::char_view p) noexcept {
-        if (!fs::exists(p)) return;
+        if (!io::exists(p)) return;
 
-        if (!fs::remove(p)) {
+        if (!io::remove(p)) {
             io::out << "[cleanup] couldn't remove: " << p << io::out.endl;
         }
     }
@@ -157,7 +154,7 @@ namespace test_fs {
 // Tests
 // ============================================================
 
-TEST_CASE("fs: basic create/stat/rename/remove + directory iteration", "[fs]") {
+TEST_CASE("io: basic create/stat/rename/remove + directory iteration", "[io]") {
     io::string dir = make_temp_dir();
 
     io::string file1{};
@@ -169,26 +166,26 @@ TEST_CASE("fs: basic create/stat/rename/remove + directory iteration", "[fs]") {
     // Create a file without strlen() and without OS headers.
     write_bytes(file1.as_view(), io::char_view{ "hello", 5 });
 
-    REQUIRE(fs::exists(file1));
-    REQUIRE(fs::is_regular_file(file1));
-    REQUIRE(fs::file_size(file1) == 5);
+    REQUIRE(io::exists(file1));
+    REQUIRE(io::is_regular_file(file1));
+    REQUIRE(io::file_size(file1) == 5);
 
     // Rename file1 -> file2 (all args are io::char_view / io::string)
-    REQUIRE(fs::rename(file1, file2));
-    REQUIRE_FALSE(fs::exists(file1));
-    REQUIRE(fs::exists(file2));
-    REQUIRE(fs::file_size(file2) == 5);
+    REQUIRE(io::rename(file1, file2));
+    REQUIRE_FALSE(io::exists(file1));
+    REQUIRE(io::exists(file2));
+    REQUIRE(io::file_size(file2) == 5);
 
     // Iterate directory and find "b.txt"
     bool found = false;
-    for (fs::directory_iterator it{ dir.as_view() }; !it.is_end(); ++it) {
+    for (io::directory_iterator it{ dir.as_view() }; !it.is_end(); ++it) {
         const auto& e = *it;
         if (!e.path.data()) continue;
 
         io::char_view base = basename_view(e.path);
         if (base == "b.txt") {
             found = true;
-            REQUIRE(e.type == fs::file_type::regular);
+            REQUIRE(e.type == io::file_type::regular);
             REQUIRE(e.size == 5);
             break;
         }
@@ -200,19 +197,19 @@ TEST_CASE("fs: basic create/stat/rename/remove + directory iteration", "[fs]") {
     cleanup_path(dir.as_view());
 }
 
-TEST_CASE("fs: status() returns not_found for missing paths", "[fs]") {
+TEST_CASE("io: status() returns not_found for missing paths", "[io]") {
     io::string dir = make_temp_dir();
 
     io::string missing{};
     REQUIRE(path_join(dir.as_view(), "does_not_exist.bin", missing));
 
-    REQUIRE_FALSE(fs::exists(missing));
-    REQUIRE(fs::status(missing) == fs::file_type::not_found);
+    REQUIRE_FALSE(io::exists(missing));
+    REQUIRE(io::status(missing) == io::file_type::not_found);
 
     cleanup_path(dir.as_view());
 }
 
-TEST_CASE("fs: directory_iterator skips '.' and '..' and produces full paths", "[fs]") {
+TEST_CASE("io: directory_iterator skips '.' and '..' and produces full paths", "[io]") {
     io::string dir = make_temp_dir();
 
     // Ensure at least one real entry exists.
@@ -222,7 +219,7 @@ TEST_CASE("fs: directory_iterator skips '.' and '..' and produces full paths", "
 
     bool saw_x = false;
 
-    for (fs::directory_iterator it{ dir.as_view() }; !it.is_end(); ++it) {
+    for (io::directory_iterator it{ dir.as_view() }; !it.is_end(); ++it) {
         const auto& e = *it;
 
         REQUIRE(e.path.data() != nullptr);
@@ -236,7 +233,7 @@ TEST_CASE("fs: directory_iterator skips '.' and '..' and produces full paths", "
 
         if (base == "x.txt") {
             saw_x = true;
-            REQUIRE(e.type == fs::file_type::regular);
+            REQUIRE(e.type == io::file_type::regular);
             REQUIRE(e.size == 1);
         }
 
@@ -251,9 +248,9 @@ TEST_CASE("fs: directory_iterator skips '.' and '..' and produces full paths", "
     cleanup_path(dir.as_view());
 }
 
-TEST_CASE("fs: rename over existing destination is documented (platform behavior may differ)", "[fs]") {
+TEST_CASE("io: rename over existing destination is documented (platform behavior may differ)", "[io]") {
     // This test is intentionally tolerant: it documents current behavior rather than forcing one.
-    // If you later standardize fs::rename semantics across platforms (e.g. always overwrite),
+    // If you later standardize io::rename semantics across platforms (e.g. always overwrite),
     // update this test to match.
     io::string dir = make_temp_dir();
 
@@ -264,13 +261,13 @@ TEST_CASE("fs: rename over existing destination is documented (platform behavior
     write_bytes(a.as_view(), io::char_view{ "A", 1 });
     write_bytes(b.as_view(), io::char_view{ "B", 1 });
 
-    bool ok = fs::rename(a, b);
+    bool ok = io::rename(a, b);
 
 #ifdef _WIN32
     // With MoveFileW (no REPLACE_EXISTING), overwriting typically fails.
     REQUIRE_FALSE(ok);
-    REQUIRE(fs::exists(a));
-    REQUIRE(fs::exists(b));
+    REQUIRE(io::exists(a));
+    REQUIRE(io::exists(b));
 #else
     // POSIX rename() usually overwrites (if your Linux backend follows that).
     // If your Linux backend is not implemented yet, ok may be false.
