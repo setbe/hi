@@ -299,11 +299,6 @@ namespace cl {
             for (usize i=0; i<N; ++i) diff |= (u8)(a.v[i] ^ b.v[i]);
             return diff == 0;
         }    
-        static IO_NODISCARD IO_CONSTEXPR bool ct_equal16(byte_view_n<TAG_BYTES> a,
-                                                         byte_view_n<TAG_BYTES> b) noexcept {
-            return ct_equal<TAG_BYTES>(a, b);
-        }
-
         template<usize NK, usize NN>
         static void derive_otk_from_chacha20(byte_view_n<NK> key,
                                              byte_view_n<NN> nonce,

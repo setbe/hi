@@ -9,7 +9,7 @@ cmake_minimum_required(VERSION 3.22)
 # ---------------------------------------------------------------------------
 set(HI_CUSTOM_CONFIGS "ReleaseMini;ReleaseNoConsole;ReleaseMiniNoConsole")
 
-if(CMAKE_GENERATOR MATCHES "Visual Studio")
+if(CMAKE_GENERATOR MATCHES "Visual Studio" OR CMAKE_GENERATOR MATCHES "Ninja Multi-Config")
     set(CMAKE_CONFIGURATION_TYPES
         "Debug;Release;${HI_CUSTOM_CONFIGS}"
         CACHE STRING "Available build configurations" FORCE
@@ -66,7 +66,7 @@ set(FREESTANDING_CONFIGS ReleaseMini ReleaseNoConsole ReleaseMiniNoConsole)
 
 # Helper generator expression: true when freestanding config
 set(_GE_FREESTANDING
-    "$<OR:$<CONFIG:ReleaseMini>,$<CONFIG:ReleaseNoConsole>,$<CONFIG:ReleaseMiniNoConsole>>"
+    $<OR:$<CONFIG:ReleaseMini>,$<CONFIG:ReleaseNoConsole>,$<CONFIG:ReleaseMiniNoConsole>>
 )
 
 # -----------------------------------------------------------------------------
@@ -150,9 +150,16 @@ set(unix_freestanding_full_opt
 )
 
 set(unix_freestanding_mini_opt
-    "-O1"
     "-Os"
-    "-ffast-math"
+    "-ffunction-sections"
+    "-fdata-sections"
+    "-fno-exceptions"
+    "-fno-rtti"
+    "-fno-unwind-tables"
+    "-fno-asynchronous-unwind-tables"
+    "-fno-ident"
+    "-fvisibility=hidden"
+    "-fvisibility-inlines-hidden"
 )
 
 set(unix_debug_compile
@@ -230,11 +237,19 @@ function(hi_apply_freestanding target)
         $<$<AND:$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>>,$<CONFIG:ReleaseMiniNoConsole>>:${unix_freestanding_mini_opt}>
     )
 
-    # GC sections on Unix for freestanding
-    if(NOT MSVC)
-        target_link_options(${target} PRIVATE
-            $<$<AND:$<OR:$<CONFIG:ReleaseMini>,$<CONFIG:ReleaseNoConsole>,$<CONFIG:ReleaseMiniNoConsole>>:LINKER:--gc-sections>
-        )
+    # GCC/Clang no-std
+    if(UNIX AND NOT APPLE)
+      target_link_options(${target} PRIVATE
+        $<$<AND:${_GE_FREESTANDING},$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>>>:
+          -s -nostdlib -nostartfiles -nodefaultlibs -fno-stack-protector -fno-unwind-tables -fno-asynchronous-unwind-tables
+          -Wl,--hash-style=gnu
+          -Wl,--build-id=none
+          -Wl,--gc-sections
+          -Wl,-e,_start
+          -Wl,-z,norelro
+          -Wl,-z,now
+        >
+      )
     endif()
 endfunction()
 

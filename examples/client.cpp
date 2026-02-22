@@ -1,6 +1,5 @@
 #define IO_IMPLEMENTATION
 #include "../hi/socket.hpp"
-#include "../hi/crypto/x25519.hpp"
 
 using Loop = io::EventLoop<1200, 2048>;
 
@@ -30,12 +29,12 @@ static void on_packet(void*, io::Endpoint from, io::u8 type, io::UdpChan, io::by
     }
 }
 
-static void on_drop(void*, io::Endpoint from, io::Error why) {
-    io::out << "DROP from " << from << " err=" << (io::u32)why << '\n' << io::out.endl;
+static void on_drop(void*, io::Endpoint from, io::Error why, io::DropReason dr) {
+    io::out << "DROP from " << from << " err=" << why << " reason=" << dr << '\n' << io::out.endl;
 }
 
 static void on_disconnect(void*, io::Endpoint peer, io::u32 /*session_id*/, io::DisconnectReason why) {
-    io::out << "DISCONNECT peer=" << peer << " why=" << (io::u32)why << '\n' << io::out.endl;
+    io::out << "DISCONNECT peer=" << peer << " why=" << why << '\n' << io::out.endl;
 }
 
 
@@ -43,14 +42,14 @@ int main() {
     io::sleep_ms(1000);
 
     g_server.addr_be = io::IP::from_string("127.0.0.1");
-    g_server.port_be = io::htons(7777);
+    g_server.port_be = io::h2ns(7777);
 
     io::Socket udp{};
     if (!udp.open(io::Protocol::UDP)) return 1;
 
     io::Endpoint bind_ep{};
     bind_ep.addr_be = io::IP::from_string("0.0.0.0");
-    bind_ep.port_be = io::htons(0);
+    bind_ep.port_be = io::h2ns(0);
     if (!udp.bind(bind_ep)) return 2;
     (void)udp.set_blocking(false);
 
@@ -63,7 +62,7 @@ int main() {
     // start handshake
     {
         const io::u64 now = io::monotonic_ms();
-        if (!loop.start_client_handshake(g_server, 0x12345678u, 1200, io::FEATURE_COOKIE, now))
+        if (!loop.start_client_handshake(g_server, 1200, io::FEATURE_COOKIE, now))
             return 5;
     }
 

@@ -1,5 +1,4 @@
-﻿#pragma once
-#define CATCH_CONFIG_MAIN
+﻿#define CATCH_CONFIG_MAIN
 #define IO_IMPLEMENTATION
 #include "test_socket.hpp"
 

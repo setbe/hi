@@ -22,7 +22,7 @@
         User packets must be rejected if they belong to an old session.
 
     Next milestone: encrypted transport:
-    - AEAD: ChaCha20-Poly1305 for all user packets (and optionally handshake).
+    - AEAD: ChaCha20 for all user packets.
     - Key exchange: X25519 (elliptic curve Diffie-Hellman).
     - Public key distribution options:
         1) Pinned server public key embedded into the client (simple, robust).
@@ -38,8 +38,7 @@
 
 #pragma once
 #include "io.hpp"
-
-#include <assert.h>
+#include "crypto/poly1305.hpp"
 
 #if defined(_WIN32)
 #   define WIN32_LEAN_AND_MEAN
@@ -48,43 +47,64 @@
 #   include <ws2tcpip.h>
 #   pragma comment(lib, "Ws2_32.lib")
 #elif defined(__linux__)
-#   include <sys/types.h>
-#   include <sys/socket.h>
-#   include <netinet/in.h>
-#   include <arpa/inet.h>
-#   include <unistd.h>
-#   include <fcntl.h>
-#   include <errno.h>
-#   include <sys/epoll.h>
+    // nothing to include
 #else
 #   error "OS isn't specified"
 #endif
 
 namespace io {
-    static constexpr u32 FEATURE_COOKIE = 1u; // supports cookie handshake
+    static IO_CONSTEXPR_VAR u32 UDP_MAGIC = 0x48494F55u; // 'UIOH'
+    static IO_CONSTEXPR_VAR u16 UDP_VERSION = 1;
+    static IO_CONSTEXPR_VAR u32 FEATURE_COOKIE = 1u; // supports cookie handshake
 
     // MTU contract: payload cap we promise to never exceed after handshake.
-    static constexpr u16 DEFAULT_MTU = 1200;
-    static constexpr u16 MIN_MTU = 512;
-    static constexpr u16 MAX_MTU = 1400; // safe-ish for internet UDP (no fragmentation)
+    static IO_CONSTEXPR_VAR u16 DEFAULT_MTU = 1200;
+    static IO_CONSTEXPR_VAR u16 MIN_MTU = 512;
+    static IO_CONSTEXPR_VAR u16 MAX_MTU = 1400; // safe-ish for internet UDP (no fragmentation)
 
     // session timeouts
-    static constexpr u32 HANDSHAKE_TIMEOUT_MS = 3000;
-    static constexpr u32 PEER_TIMEOUT_MS = 5000;
-    static constexpr u32 KEEPALIVE_INTERVAL_MS = 1000;
+    static IO_CONSTEXPR_VAR u32 HANDSHAKE_TIMEOUT_MS = 3000;
+    static IO_CONSTEXPR_VAR u32 PEER_TIMEOUT_MS = 5000;
+    static IO_CONSTEXPR_VAR u32 KEEPALIVE_INTERVAL_MS = 1000;
 
-    static constexpr usize MAX_PEERS = 64;
-    static constexpr usize REL_INFLIGHT = 64; // pick sane inflight cap; 64..256 depends on your needs
+    static IO_CONSTEXPR_VAR usize MAX_PEERS = 64;
+    static IO_CONSTEXPR_VAR usize REL_INFLIGHT = 64; // pick sane inflight cap; 64..256 depends on your needs
 
     enum : u8 {
-        MSG_HELLO = 1,
-        MSG_COOKIE = 2, // server -> client challenge
-        MSG_WELCOME = 3,
+        MSG_HELLO      = 1,
+        MSG_COOKIE     = 2, // server -> client challenge
+        MSG_WELCOME    = 3,
         MSG_DISCONNECT = 4,
-        MSG_KEEPALIVE = 5,
-        MSG_HELLO2 = 6,  // client -> server, includes cookie
+        MSG_KEEPALIVE  = 5,
+        MSG_HELLO2     = 6,  // client -> server, includes cookie
         MSG_KEEPALIVE2 = 7,  // keepalive payload (optional)
     };
+
+    enum class DropReason : u8 {
+        TooSmall = 1,
+        BadMagic = 2,
+        BadVer   = 3,
+        BadLen   = 4,
+        BadHs    = 5,
+        BadCtrl  = 6,
+        BadMtu   = 7,
+        FullPeerTable = 8,
+    };
+
+    static const char* drop_reason_str(DropReason r) {
+        switch (r) {
+            case DropReason::TooSmall: return "TooSmall";
+            case DropReason::BadMagic: return "BadMagic";
+            case DropReason::BadVer:   return "BadVer";
+            case DropReason::BadLen:   return "BadLen";
+            case DropReason::BadHs:    return "BadHs";
+            case DropReason::BadCtrl:  return "BadCtrl";
+            case DropReason::BadMtu:   return "BadMtu";
+            case DropReason::FullPeerTable:   return "FullPeerTable";
+            default: return "?";
+        }
+    }
+
 
     // payloads (packed)
 #pragma pack(push, 1)
@@ -94,7 +114,7 @@ namespace io {
         u32 client_nonce;
     };
     struct msg_cookie {
-        u64 cookie;
+        u8 cookie[16];
         u32 nonce_echo;
     };
     struct msg_welcome {
@@ -108,7 +128,7 @@ namespace io {
         u8 _pad[3]{};
     };
     struct msg_hello2 {
-        u64 cookie;
+        u8 cookie[16];
         u32 client_nonce;
         u16 mtu;
         u16 features;
@@ -116,13 +136,154 @@ namespace io {
     struct msg_keepalive2 {
         u32 session_id;
     };
+
+    struct poly_cookie {
+        u32 ip_be;
+        u32 nonce_be;
+        u32 time_bucket_be; // e.g. now_ms >> 10
+        u16 port_be;
+        u16 ver_be;         // UDP_VERSION (optional)
+    };
 #pragma pack(pop)
     static_assert(sizeof(msg_hello) == 8, "msg_hello layout");
-    static_assert(sizeof(msg_cookie) == 12, "msg_cookie layout");
+    static_assert(sizeof(msg_cookie) == 16+4, "msg_cookie layout");
     static_assert(sizeof(msg_welcome) == 8, "msg_welcome layout");
     static_assert(sizeof(msg_disconnect) == 8, "msg_disconnet layout");
-    static_assert(sizeof(msg_hello2) == 16, "msg_hello2 layout");
+    static_assert(sizeof(msg_hello2) == 16+4+2+2, "msg_hello2 layout");
     static_assert(sizeof(msg_keepalive2) == 4, "msg_keepalive2 layout");
+    static_assert(sizeof(poly_cookie) == 4+4+4+2+2, "");
+
+
+
+
+
+#ifdef __linux__
+namespace native {
+// -------- socket ABI constants --------
+    static IO_CONSTEXPR_VAR int k_af_inet     = 2;
+    static IO_CONSTEXPR_VAR int k_sock_stream = 1;
+    static IO_CONSTEXPR_VAR int k_sock_dgram  = 2;
+
+    static IO_CONSTEXPR_VAR int k_ipproto_udp = 17;
+    static IO_CONSTEXPR_VAR int k_ipproto_tcp = 6;
+
+    // fcntl
+    static IO_CONSTEXPR_VAR int k_f_getfl   = 3;
+    static IO_CONSTEXPR_VAR int k_f_setfl   = 4;
+    static IO_CONSTEXPR_VAR int k_o_nonblock= 0x800; // Linux O_NONBLOCK ABI
+
+    // -------- sockaddr ABI --------
+    using socklen_t = unsigned int;
+
+    struct in_addr { u32 s_addr; };
+
+    struct sockaddr_in {
+        u16 sin_family;
+        u16 sin_port;
+        in_addr sin_addr;
+        unsigned char sin_zero[8];
+    };
+
+    struct sockaddr {
+        unsigned short sa_family;
+        char sa_data[14];
+    };
+
+    // -------- epoll ABI --------
+    static IO_CONSTEXPR_VAR int k_epollin       = 0x001;
+    static IO_CONSTEXPR_VAR int k_epoll_ctl_add = 1;
+
+    union epoll_data {
+        void* ptr;
+        int   fd;
+        u32   u32_;
+        u64   u64_;
+    };
+
+    struct epoll_event {
+        u32 events;
+        epoll_data data;
+    };
+
+#if defined(__x86_64__)
+    static IO_CONSTEXPR_VAR long k_sys_socket       = 41;
+    static IO_CONSTEXPR_VAR long k_sys_bind         = 49;
+    static IO_CONSTEXPR_VAR long k_sys_sendto       = 44;
+    static IO_CONSTEXPR_VAR long k_sys_recvfrom     = 45;
+    static IO_CONSTEXPR_VAR long k_sys_fcntl        = 72;
+
+    static IO_CONSTEXPR_VAR long k_sys_epoll_create1= 291;
+    static IO_CONSTEXPR_VAR long k_sys_epoll_ctl    = 233;
+    static IO_CONSTEXPR_VAR long k_sys_epoll_wait   = 232;
+
+#elif defined(__i386__)
+    static IO_CONSTEXPR_VAR long k_sys_socketcall   = 102; // i386 uses socketcall multiplexer
+    static IO_CONSTEXPR_VAR long k_sys_fcntl        = 55;
+
+    static IO_CONSTEXPR_VAR long k_sys_epoll_create1= 329;
+    static IO_CONSTEXPR_VAR long k_sys_epoll_ctl    = 255;
+    static IO_CONSTEXPR_VAR long k_sys_epoll_wait   = 256;
+
+    // socketcall ops:
+    static IO_CONSTEXPR_VAR long k_sc_socket   = 1;
+    static IO_CONSTEXPR_VAR long k_sc_bind     = 2;
+    static IO_CONSTEXPR_VAR long k_sc_sendto   = 11;
+    static IO_CONSTEXPR_VAR long k_sc_recvfrom = 12;
+#else
+#   error "linux: unsupported arch"
+#endif
+
+// --- helpers ---
+#if defined(__i386__)
+    static inline long socketcall(long op, long* args) noexcept {
+        return sys2(k_sys_socketcall, op, (long)(usize)args);
+    }
+#endif
+
+    static inline long sys_socket(int domain, int type, int protocol) noexcept {
+#if defined(__x86_64__)
+        return sys3(k_sys_socket, domain, type, protocol);
+#else
+        long a[3]{ domain, type, protocol };
+        return socketcall(k_sc_socket, a);
+#endif
+    }
+
+    static inline long sys_bind(int fd, const void* addr, unsigned len) noexcept {
+#if defined(__x86_64__)
+        return sys3(k_sys_bind, fd, (long)(usize)addr, (long)len);
+#else
+        long a[3]{ fd, (long)(usize)addr, (long)len };
+        return socketcall(k_sc_bind, a);
+#endif
+    }
+
+    static inline long sys_sendto(int fd, const void* buf, unsigned long len, int flags,
+                                  const void* addr, unsigned addrlen) noexcept {
+#if defined(__x86_64__)
+        return sys6(k_sys_sendto, fd, (long)(usize)buf, (long)len, flags, (long)(usize)addr, (long)addrlen);
+#else
+        long a[6]{ fd, (long)(usize)buf, (long)len, flags, (long)(usize)addr, (long)addrlen };
+        return socketcall(k_sc_sendto, a);
+#endif
+    }
+
+    static inline long sys_recvfrom(int fd, void* buf, unsigned long len, int flags,
+                                    void* addr, unsigned* addrlen_inout) noexcept {
+#if defined(__x86_64__)
+        return sys6(k_sys_recvfrom, fd, (long)(usize)buf, (long)len, flags, (long)(usize)addr, (long)(usize)addrlen_inout);
+#else
+        long a[6]{ fd, (long)(usize)buf, (long)len, flags, (long)(usize)addr, (long)(usize)addrlen_inout };
+        return socketcall(k_sc_recvfrom, a);
+#endif
+    }
+    static inline long sys_close(int fd) noexcept { return sys1(k_sys_close, fd); }
+    static inline long sys_fcntl(int fd, int cmd, long arg) noexcept { return sys3(k_sys_fcntl, fd, cmd, arg); }
+    static inline long sys_epoll_create1(int flags) noexcept { return sys1(k_sys_epoll_create1, flags); }
+    static inline long sys_epoll_ctl(int epfd, int op, int fd, epoll_event* ev) noexcept { return sys4(k_sys_epoll_ctl, epfd, op, fd, (long)(usize)ev); }
+    static inline long sys_epoll_wait(int epfd, epoll_event* evs, int maxevents, int timeout_ms) noexcept { return sys4(k_sys_epoll_wait, epfd, (long)(usize)evs, maxevents, timeout_ms); }
+} // namespace native
+#endif // __linux__
 
     // ========================= byte order (endian-safe) =========================
     // Assumptions: protocol is defined in network byte order (big-endian).
@@ -156,13 +317,13 @@ namespace io {
 #   define IO_LITTLE_ENDIAN 0
 #endif
 
-    IO_CONSTEXPR u16 htons(u16 x) noexcept { return IO_LITTLE_ENDIAN ? bswap16(x) : x; }
-    IO_CONSTEXPR u32 htonl(u32 x) noexcept { return IO_LITTLE_ENDIAN ? bswap32(x) : x; }
-    IO_CONSTEXPR u64 htonll(u64 x) noexcept { return IO_LITTLE_ENDIAN ? bswap64(x) : x; }
+    IO_CONSTEXPR u16 h2ns(u16 x) noexcept { return IO_LITTLE_ENDIAN ? bswap16(x) : x; }
+    IO_CONSTEXPR u32 h2nl(u32 x) noexcept { return IO_LITTLE_ENDIAN ? bswap32(x) : x; }
+    IO_CONSTEXPR u64 h2nll(u64 x) noexcept { return IO_LITTLE_ENDIAN ? bswap64(x) : x; }
 
-    IO_CONSTEXPR u16 ntohs(u16 x) noexcept { return io::htons(x); }
-    IO_CONSTEXPR u32 ntohl(u32 x) noexcept { return io::htonl(x); }
-    IO_CONSTEXPR u64 ntohll(u64 x) noexcept { return io::htonll(x); }
+    IO_CONSTEXPR u16 n2hs(u16 x) noexcept  { return ::io::h2ns(x); }
+    IO_CONSTEXPR u32 n2hl(u32 x) noexcept  { return ::io::h2nl(x); }
+    IO_CONSTEXPR u64 n2hll(u64 x) noexcept { return ::io::h2nll(x); }
 
     static IO_CONSTEXPR u32 parse_component(char_view s, usize& i) noexcept {
         const usize n = s.size();
@@ -190,33 +351,15 @@ namespace io {
         // "X.Y.Z.W" -> u32 (network order), returns 0 on failure
         static IO_CONSTEXPR u32 from_string(char_view s) noexcept {
             if (!s || s.size() < 7) return 0;
-            const usize n = s.size();
-            usize i = 0;
-
-            u32 o0 = parse_component(s, i);
-            if (o0 > 255 || i >= n || s[i] != '.') return 0; ++i;
-
-            u32 o1 = parse_component(s, i);
-            if (o1 > 255 || i >= n || s[i] != '.') return 0; ++i;
-
-            u32 o2 = parse_component(s, i);
-            if (o2 > 255 || i >= n || s[i] != '.') return 0; ++i;
-
-            u32 o3 = parse_component(s, i);
-            if (o3 > 255) return 0;
-            if (i != n) return 0;
-
-            const u32 host =
-                ((o0 & 0xFFu) << 24) |
-                ((o1 & 0xFFu) << 16) |
-                ((o2 & 0xFFu) << 8) |
-                (o3 & 0xFFu);
-
-            return io::htonl(host);
+            const usize n = s.size(); usize i = 0;
+            const u32 o0 = parse_component(s, i); if (o0>255 || i>=n || s[i]!='.') return 0; ++i;
+            const u32 o1 = parse_component(s, i); if (o1>255 || i>=n || s[i]!='.') return 0; ++i;
+            const u32 o2 = parse_component(s, i); if (o2>255 || i>=n || s[i]!='.') return 0; ++i;
+            const u32 o3 = parse_component(s, i); if (o3>255 || i!=n) return 0;
+            u32 host = ((o0 & 0xFFu) << 24) | ((o1 & 0xFFu) << 16) | ((o2 & 0xFFu) << 8) | (o3 & 0xFFu);
+            return ::io::h2nl(host);
         }
     }; // struct IP
-
-
 
     // ------------------------- endpoint --------------------------------
     struct Endpoint {
@@ -236,35 +379,45 @@ namespace io {
 
     static inline u32 rotl32(u32 x, u32 r) noexcept { return (x << (r & 31)) | (x >> ((32 - r) & 31)); }
 
-    // tiny non-crypto hash for cookie (replace with SipHash/ChaCha later)
-    static inline u64 cookie_make(u64 secret, Endpoint ep, u32 nonce, u64 now_ms) noexcept {
-        // secret + ip:port + nonce + coarse time bucket -> 64-bit cookie
-        u32 ip = io::ntohl(ep.addr_be);
-        u32 port = (u32)io::ntohs(ep.port_be);
-        u32 t = (u32)(now_ms >> 10); // ~ /1024, is enough for bucket
-        u32 a = (u32)secret ^ ip;
-        u32 b = (u32)(secret >> 32) ^ port;
-        u32 c = nonce ^ t;
+    static inline void cookie_tag16(byte_view_mut_n<16> out16,
+                                    byte_view_n<32> key32,
+                                    Endpoint ep, u32 nonce, u64 now_ms) noexcept {
+        poly_cookie pc{};
+        pc.ip_be          = ep.addr_be;
+        pc.nonce_be       = ::io::h2nl(nonce);
+        pc.time_bucket_be = ::io::h2nl((u32)(now_ms >> 10)); // div 1024
+        pc.port_be        = ep.port_be;
+        pc.ver_be         = ::io::h2ns(UDP_VERSION);
 
-        u32 h = 0x9E3779B9u;
-        h ^= rotl32(a, 5);  h *= 0x85EBCA6Bu;
-        h ^= rotl32(b, 13); h *= 0xC2B2AE35u;
-        h ^= rotl32(c, 17); h *= 0x27D4EB2Fu;
-
-        u64 hi = (u64)h;
-        u64 lo = (u64)(h ^ a ^ b ^ c);
-        return (hi << 32) | (lo & 0xFFFFFFFFull);
+        cl::poly1305 mac;
+        mac.init(key32);
+        mac.update(byte_view_n<sizeof(pc)>{ (const io::u8*)&pc });
+        mac.final(out16);
     }
 
-    static inline bool cookie_check(u64 cookie, u64 secret, Endpoint ep, u32 nonce, u64 now_ms) noexcept {
-        // accept current and previous bucket to tolerate jitter
-        u64 c0 = cookie_make(secret, ep, nonce, now_ms);
-        u64 c1 = cookie_make(secret, ep, nonce, now_ms - 1000ull);
-        return cookie == c0 || cookie == c1;
+    static inline bool cookie_check(byte_view_n<16> recv16,
+                                    byte_view_n<32> key32,
+                                    Endpoint ep, io::u32 nonce, io::u64 now_ms) noexcept {
+        io::u8 t0[16], t1[16];
+        cookie_tag16(byte_view_mut_n<16>{ t0 }, key32, ep, nonce, now_ms);
+        cookie_tag16(byte_view_mut_n<16>{ t1 }, key32, ep, nonce, now_ms - 1024);
+        return cl::poly1305::ct_equal(recv16, as_view(t0)) ||
+               cl::poly1305::ct_equal(recv16, as_view(t1));
     }
 
     enum class Protocol : u8 { TCP, UDP };
     enum class Error : u8 { None = 0, WouldBlock, Again, Closed, Generic };
+
+    static const char* error_str(Error r) {
+        switch (r) {
+            case Error::None:       return "None";
+            case Error::WouldBlock: return "WouldBlock";
+            case Error::Again:      return "Again";
+            case Error::Closed:     return "Closed";
+            case Error::Generic:    return "Generic";
+            default: return "?";
+        }
+    }
 
     struct Socket {
 #if defined(_WIN32)
@@ -289,13 +442,13 @@ namespace io {
         Socket& operator=(const Socket&) = delete;
 
         Socket(Socket&& o) noexcept : _s(o._s), _error(o._error), _proto(o._proto), _opened(o._opened) {
-            o._s = invalid_native; o._opened = false; o._error = Error::Closed;
+            o._s=invalid_native; o._opened=false; o._error=Error::Closed;
         }
         Socket& operator=(Socket&& o) noexcept {
             if (this == &o) return *this;
             close();
-            _s = o._s; _error = o._error; _proto = o._proto; _opened = o._opened;
-            o._s = invalid_native; o._opened = false; o._error = Error::Closed;
+            _s=o._s; _error=o._error; _proto=o._proto; _opened=o._opened;
+            o._s=invalid_native; o._opened=false; o._error=Error::Closed;
             return *this;
         }
 
@@ -306,14 +459,20 @@ namespace io {
 
         IO_NODISCARD bool open(Protocol proto) noexcept {
             _proto = proto;
-            const int type = (proto == Protocol::TCP) ? SOCK_STREAM : SOCK_DGRAM;
-
 #if defined(_WIN32)
+            const int type = (proto == Protocol::TCP) ? SOCK_STREAM : SOCK_DGRAM;
             _s = ::socket(AF_INET, type, (proto == Protocol::TCP) ? IPPROTO_TCP : IPPROTO_UDP);
-#else
-            _s = ::socket(AF_INET, type, (proto == Protocol::TCP) ? 0 : IPPROTO_UDP);
-#endif
             if (_s == invalid_native) { update_last_error(); return false; }
+#elif defined(__linux__)
+            using namespace native;
+            const int type = (proto == Protocol::TCP) ? k_sock_stream : k_sock_dgram;
+            const int pr   = (proto == Protocol::TCP) ? k_ipproto_tcp  : k_ipproto_udp;
+            const long r = sys_socket(k_af_inet, type, pr);
+            if (is_err(r)) { update_last_error_from_ret(r); return false; }
+            _s = (int)r;
+#else
+#   error "close(): Not implemented"
+#endif
             _opened = true;
             _error = Error::None;
             return true;
@@ -322,8 +481,10 @@ namespace io {
             if (_s == invalid_native) return;
 #if defined(_WIN32)
             ::closesocket(_s);
+#elif defined(__linux__)
+            (void)native::sys_close(_s);
 #else
-            ::close(_s);
+#   error "close(): Not implemented"
 #endif
             _s = invalid_native;
             _opened = false;
@@ -335,60 +496,81 @@ namespace io {
             unsigned long mode = blocking ? 0 : 1;
             if (::ioctlsocket(_s, FIONBIO, &mode) != 0) { update_last_error(); return false; }
             return true;
-#else
-            int flags = ::fcntl(_s, F_GETFL, 0);
-            if (flags < 0) { update_last_error(); return false; }
-            flags = blocking ? (flags & ~O_NONBLOCK) : (flags | O_NONBLOCK);
-            if (::fcntl(_s, F_SETFL, flags) != 0) { update_last_error(); return false; }
+#elif defined(__linux__)
+            using namespace native;
+            const long fl = sys_fcntl(_s, k_f_getfl, 0);
+            if (is_err(fl)) { update_last_error_from_ret(fl); return false; }
+            const long newfl = blocking ? (fl & ~((long)k_o_nonblock))
+                                        : (fl |  ((long)k_o_nonblock));
+            const long r = sys_fcntl(_s, k_f_setfl, newfl);
+            if (is_err(r)) { update_last_error_from_ret(r); return false; }
             return true;
+#else
+#   error "set_blocking(): Not implemented"
 #endif
         }
         IO_NODISCARD bool bind(Endpoint ep) noexcept {
             if (!_opened) { _error = Error::Generic; return false; }
+#if defined(_WIN32)
             sockaddr_in a{};
-            a.sin_family = AF_INET;
+            a.sin_family      = AF_INET;
             a.sin_addr.s_addr = ep.addr_be;
-            a.sin_port = ep.port_be;
-
+            a.sin_port        = ep.port_be;
             const int r = ::bind(_s, reinterpret_cast<sockaddr*>(&a), (int)sizeof(a));
             if (r == 0) { _error = Error::None; return true; }
             update_last_error();
             return false;
+#elif defined(__linux__)
+            using namespace native;
+            sockaddr_in a{};
+            a.sin_family      = (u16)k_af_inet;
+            a.sin_addr.s_addr = ep.addr_be;
+            a.sin_port        = ep.port_be;
+            const long r = sys_bind(_s, &a, (unsigned)sizeof(a));
+            if (!is_err(r)) { _error = Error::None; return true; }
+            update_last_error_from_ret(r);
+            return false;
+#else
+#   error "bind(): Not implemented"
+#endif
         }
         // UDP
         IO_NODISCARD int send_to(Endpoint to, const void* data, int size) noexcept {
             if (!_opened || _proto != Protocol::UDP) { _error = Error::Generic; return -1; }
-            sockaddr_in a{};
-            a.sin_family = AF_INET;
-            a.sin_addr.s_addr = to.addr_be;
-            a.sin_port = to.port_be;
-
+            if (!data && size != 0) { _error = Error::Generic; return -1; }
+            if (size < 0) { _error = Error::Generic; return -1; }
 #if defined(_WIN32)
+            sockaddr_in a{};
+            a.sin_family      = AF_INET;
+            a.sin_addr.s_addr = to.addr_be;
+            a.sin_port        = to.port_be;
             const int r = ::sendto(_s, reinterpret_cast<const char*>(data), size, 0,
                 reinterpret_cast<sockaddr*>(&a), (int)sizeof(a));
-#else
-            const int r = ::sendto(_s, data, (usize)size, 0,
-                reinterpret_cast<sockaddr*>(&a), (socklen_t)sizeof(a));
-#endif
-            if (r >= 0) return r;
             update_last_error();
             return -1;
+#elif defined(__linux__)
+            using namespace native;
+            sockaddr_in a{};
+            a.sin_family = (u16)k_af_inet;
+            a.sin_addr.s_addr = to.addr_be;
+            a.sin_port = to.port_be;
+            const long r = sys_sendto(_s, data, (unsigned long)size, 0, &a, (socklen_t)sizeof(a));
+            if (!is_err(r)) { _error = Error::None; return (int)r; }
+            update_last_error_from_ret(r);
+            return -1;
+#else
+#   error "send_to(): Not implemented"
+#endif
         }
         IO_NODISCARD int recv_from(Endpoint& out_from, void* data, int size) noexcept {
             if (!_opened || _proto != Protocol::UDP) { _error = Error::Generic; return -1; }
             if (!data && size != 0) { _error = Error::Generic; return -1; }
             if (size < 0) { _error = Error::Generic; return -1; }
-
-            sockaddr_in a{};
 #if defined(_WIN32)
+            sockaddr_in a{};
             int alen = (int)sizeof(a);
             const int r = ::recvfrom(_s, reinterpret_cast<char*>(data), size, 0,
                 reinterpret_cast<sockaddr*>(&a), &alen);
-#else
-            socklen_t alen = (socklen_t)sizeof(a);
-            const int r = ::recvfrom(_s, data, (usize)size, 0,
-                reinterpret_cast<sockaddr*>(&a), &alen);
-#endif
             if (r >= 0) {
                 out_from.addr_be = a.sin_addr.s_addr;
                 out_from.port_be = a.sin_port;
@@ -397,22 +579,44 @@ namespace io {
             }
             update_last_error();
             return -1;
+#elif defined(__linux__)
+            using namespace native;
+            sockaddr_in a{};
+            socklen_t alen = (socklen_t)sizeof(a);
+            const long r = sys_recvfrom(_s, data, (unsigned long)size, 0, &a, &alen);
+            if (!is_err(r)) {
+                out_from.addr_be = a.sin_addr.s_addr;
+                out_from.port_be = a.sin_port;
+                _error = Error::None;
+                return (int)r;
+            }
+            update_last_error_from_ret(r);
+            return -1;
+#else
+#   error "recv_from(): Not implemented"
+#endif
         }
 
     private:
-        void update_last_error() noexcept {
+        
 #if defined(_WIN32)
+        void update_last_error() noexcept {
             const int e = WSAGetLastError();
             if (e == WSAEWOULDBLOCK) { _error = Error::WouldBlock; return; }
-            if (e == WSAEINTR) { _error = Error::Again;      return; }
-            if (e == WSAECONNRESET) { _error = Error::Closed;     return; }
+            if (e == WSAEINTR)       { _error = Error::Again;      return; }
+            if (e == WSAECONNRESET)  { _error = Error::Closed;     return; }
+            _error = Error::Generic;
+#elif defined(__linux__)
+        void update_last_error_from_ret(long r) noexcept {
+            using namespace native;
+            if (!is_err(r)) { _error = Error::None; return; }
+            const long e = err_no(r);
+            if (e == k_eagain || e == k_ewouldblock) { _error = Error::WouldBlock; return; }
+            if (e == k_eintr)                        { _error = Error::Again; return; }
+            if (e == k_econnreset)                   { _error = Error::Closed; return; }
             _error = Error::Generic;
 #else
-            const int e = errno;
-            if (e == EWOULDBLOCK || e == EAGAIN) { _error = Error::WouldBlock; return; }
-            if (e == EINTR) { _error = Error::Again;      return; }
-            if (e == ECONNRESET) { _error = Error::Closed;     return; }
-            _error = Error::Generic;
+#   error "update_last_error(): Not implemented"
 #endif
         }
 
@@ -519,10 +723,9 @@ namespace io {
     }
 
     // ====================================================================
-    // UDP game header
+    // UDP header
     // ====================================================================
-    static IO_CONSTEXPR_VAR u32 UDP_MAGIC = 0x48494F55u; // 'UIOH'
-    static IO_CONSTEXPR_VAR u16 UDP_VERSION = 1;
+    
 
     enum class UdpChan : u8 { Unreliable = 0, Reliable = 1 };
 
@@ -542,22 +745,22 @@ namespace io {
 
     // Convert host->wire in-place (network order).
     static inline void udp_header_host_to_wire(UdpHeader& h) noexcept {
-        h.magic = io::htonl(h.magic);
-        h.version = io::htons(h.version);
-        h.seq = io::htonl(h.seq);
-        h.ack = io::htonl(h.ack);
-        h.ack_bits = io::htonll(h.ack_bits);
-        h.payload_len = io::htons(h.payload_len);
+        h.magic       = ::io::h2nl(h.magic);
+        h.version     = ::io::h2ns(h.version);
+        h.seq         = ::io::h2nl(h.seq);
+        h.ack         = ::io::h2nl(h.ack);
+        h.ack_bits    = ::io::h2nll(h.ack_bits);
+        h.payload_len = ::io::h2ns(h.payload_len);
     }
 
     // Convert wire->host in-place.
     static inline void udp_header_wire_to_host(UdpHeader& h) noexcept {
-        h.magic = io::ntohl(h.magic);
-        h.version = io::ntohs(h.version);
-        h.seq = io::ntohl(h.seq);
-        h.ack = io::ntohl(h.ack);
-        h.ack_bits = io::ntohll(h.ack_bits);
-        h.payload_len = io::ntohs(h.payload_len);
+        h.magic       = ::io::n2hl(h.magic);
+        h.version     = ::io::n2hs(h.version);
+        h.seq         = ::io::n2hl(h.seq);
+        h.ack         = ::io::n2hl(h.ack);
+        h.ack_bits    = ::io::n2hll(h.ack_bits);
+        h.payload_len = ::io::n2hs(h.payload_len);
     }
 
     enum class DisconnectReason : u8 {
@@ -568,10 +771,21 @@ namespace io {
         ServerClosed     = 4,
     };
 
+    static const char* disconnect_reason_str(DisconnectReason dr) noexcept {
+        switch(dr) {
+            case DisconnectReason::Unknown: return "Unknown";
+            case DisconnectReason::HandshakeTimeout: return "HandshakeTimeout";
+            case DisconnectReason::PeerTimeout: return "PeerTimeout";
+            case DisconnectReason::LocalReset: return "LocalReset";
+            case DisconnectReason::ServerClosed: return "ServerClosed";
+            default: return "?";
+        }
+    }
+
     // -------------- callbacks ------------------------------------------
     struct UdpCallbacks {
         void (*on_packet)(void* ud, Endpoint from, u8 type, UdpChan chan, byte_view payload) = nullptr;
-        void (*on_drop)(void* ud, Endpoint from, Error why) = nullptr;
+        void (*on_drop)(void* ud, Endpoint from, Error why, DropReason reason) = nullptr;
         void (*on_established)(void* ud, Endpoint peer, u32 session_id) = nullptr;
         void (*on_disconnect)(void* ud, Endpoint peer, u32 session_id, DisconnectReason why) = nullptr;
         void* ud = nullptr;
@@ -601,7 +815,7 @@ namespace io {
             mem.reset(nullptr);
             cap = head = tail = used = 0;
 
-            u8* p = static_cast<u8*>(io::alloc_aligned(capacity_bytes, alignment));
+            u8* p = static_cast<u8*>(alloc_aligned(capacity_bytes, alignment));
             if (!p) return false;
             mem = unique_bytes{ p };
             cap = capacity_bytes;
@@ -661,7 +875,7 @@ namespace io {
 
     template<u16 MaxPayload, usize MaxInflight>
     struct reliable_outbox {
-        static constexpr u32 SLOT_STRIDE = (u32)sizeof(UdpHeader) + (u32)MaxPayload;
+        static IO_CONSTEXPR_VAR u32 SLOT_STRIDE = (u32)sizeof(UdpHeader) + (u32)MaxPayload;
 
         struct reliable_packet {
             u64 last_send_ms = 0;
@@ -717,16 +931,16 @@ namespace io {
         u32 at = 0;
 
         IO_NODISCARD bool init(u32 bytes, usize alignment = 16) noexcept {
-            base = (u8*)io::alloc_aligned(bytes, alignment);
+            base = (u8*)alloc_aligned(bytes, alignment);
             if (!base) { cap=at=0; return false; }
             cap = bytes;
             at = 0;
             return true;
         }
-        ~linear_arena() noexcept { if (base) io::free_aligned(base); }
+        ~linear_arena() noexcept { if (base) free_aligned(base); }
 
-        static constexpr u32 align_up_u32(u32 x, u32 a) noexcept { return (x + (a-1u)) & ~(a-1u); }
-        template<class T> static constexpr u32 alignof_u32() noexcept { return (u32)alignof(T); }
+        static IO_CONSTEXPR_VAR u32 align_up_u32(u32 x, u32 a) noexcept { return (x + (a-1u)) & ~(a-1u); }
+        template<class T> static IO_CONSTEXPR_VAR u32 alignof_u32() noexcept { return (u32)alignof(T); }
 
         IO_NODISCARD void* alloc(u32 bytes, u32 align) noexcept {
             u32 p = align_up_u32(at, (u32)align);
@@ -780,9 +994,9 @@ namespace io {
         static_assert(MaxPayload > 0, "MaxPayload must be > 0");
         static_assert(MaxPackets > 0, "MaxPackets must be > 0");
 
-        static constexpr u32 SENDQ_CAP = (u32)MaxPackets;
+        static IO_CONSTEXPR_VAR u32 SENDQ_CAP = (u32)MaxPackets;
 
-        using rel_box = typename reliable_outbox<MaxPayload, REL_INFLIGHT>;
+        using rel_box = reliable_outbox<MaxPayload, REL_INFLIGHT>;
         using rel_packet = typename reliable_outbox<MaxPayload, REL_INFLIGHT>::reliable_packet;
 
         // Peer state for ack/ack_bits integration.
@@ -826,13 +1040,12 @@ namespace io {
         // @TODO split in union fields below to separate server/client
 
         // HS server
-        // @TODO you can randomize later
-        u64 server_cookie_secret = 0x0000'0000'0000'0000ull; // set once;
+        u8 server_cookie_secret[32]{}; // set by server once on init
         u32 server_next_session_id = 1;
 
         // HS client
         Endpoint server_ep{};
-        u32 client_nonce = 0x12345678u; // set by user
+        u32 client_nonce = 0x12345678u; // set by user on HS, could be wiped when established
         u32 session_id = 0;
         u16 desired_mtu = DEFAULT_MTU;
         u16 desired_features = FEATURE_COOKIE;
@@ -849,21 +1062,27 @@ namespace io {
             is_server = is_server_;
             server_next_session_id = 1;
             running = true;
+            if (is_server) {
+                (void)os_entropy(&server_cookie_secret, sizeof(server_cookie_secret));
+                if (server_cookie_secret == 0) { // fallback non-zero
+                    for (int i=0; i<32; ++i) server_cookie_secret[i] = i*2+1;
+                }
+            }
 
             if (!perm.init(perm_bytes)) return false;
             if (!tx_arena.init(tx_bytes)) return false;
             
-            sendq_mem.reset((u8*)io::alloc_aligned((u32)(MaxPackets * sizeof(packet_ref)), 16));
+            sendq_mem.reset((u8*)alloc_aligned((u32)(MaxPackets * sizeof(packet_ref)), 16));
             if (!sendq_mem.get()) return false;
             if (!sendq.init(sendq_mem, (u32)MaxPackets)) return false;
 
             // check arena size in debug; in release we pass UNRELIABLE connections if not checked before
 #ifndef NDEBUG
-            constexpr u32 need_perm = calc_perm_bytes_for_rel();
+            IO_CONSTEXPR_VAR u32 need_perm = calc_perm_bytes_for_rel();
             assert(perm_bytes >= need_perm);
 #endif
 
-            peers_mem.reset((u8*)io::alloc_aligned((u32)(MAX_PEERS * sizeof(udp_peer_state)), alignof(udp_peer_state)));
+            peers_mem.reset((u8*)alloc_aligned((u32)(MAX_PEERS * sizeof(udp_peer_state)), alignof(udp_peer_state)));
             if (!peers_mem.get()) return false;
 
             peers = (udp_peer_state*)peers_mem.get();
@@ -877,7 +1096,7 @@ namespace io {
                 void* pkts_mem = perm.alloc((u32)(REL_INFLIGHT * sizeof(rel_packet)), alignof(rel_packet));
                 void* slots_mem = perm.alloc((u32)(REL_INFLIGHT * rel_box::SLOT_STRIDE), 16);
                 assert(pkts_mem && slots_mem);
-                // if false — reliable is disabled for current peer
+                // if false -> reliable is disabled for current peer
                 ps.rel_ready = ps.rel.bind(pkts_mem, slots_mem);
                 assert(ps.rel_ready);
             }
@@ -885,12 +1104,12 @@ namespace io {
             return true;
         }
         IO_NODISCARD inline bool init(bool is_server_) noexcept {
-            constexpr u32 perm_need = calc_perm_bytes_for_rel();
+            IO_CONSTEXPR_VAR u32 perm_need = calc_perm_bytes_for_rel();
             // TX: rough, but safety guarranted. Ring keeps full datagrams
             // header + MaxPayload on packet.
-            constexpr u32 max_datagram = (u32)sizeof(UdpHeader) + (u32)MaxPayload;
+            IO_CONSTEXPR_VAR u32 max_datagram = (u32)sizeof(UdpHeader) + (u32)MaxPayload;
             // MaxPackets * max_datagram + slack for wrap/align.
-            constexpr u32 tx_need = (u32)(MaxPackets * (usize)max_datagram
+            IO_CONSTEXPR_VAR u32 tx_need = (u32)(MaxPackets * (usize)max_datagram
                                           + (usize)max_datagram + 16u);
             return init(perm_need, tx_need, is_server_);
         }
@@ -901,10 +1120,12 @@ namespace io {
             for (usize i = 0; i < MAX_PEERS; ++i) {
                 udp_peer_state& ps = peers[i];
                 if (!ps.used) continue;
-
                 // Explicitly notify all peers that we're closed
                 handle_disconnect(*cb_live, ps, DisconnectReason::ServerClosed);
             }
+#ifdef __linux__
+            if (ep >= 0) { (void)native::sys_close(ep); ep = -1; }
+#endif
         }
 
     private:
@@ -969,7 +1190,7 @@ namespace io {
             return (u16)MaxPayload; // pre-established: allow only compile-time cap (for handshake)
         }
         
-        static constexpr u32 calc_perm_bytes_for_rel() noexcept {
+        static IO_CONSTEXPR_VAR u32 calc_perm_bytes_for_rel() noexcept {
             u32 at = 0;
             for (u32 i = 0; i < (u32)MAX_PEERS; ++i) {
                 at = linear_arena::align_up_u32(at, linear_arena::alignof_u32<rel_packet>());
@@ -1172,7 +1393,7 @@ namespace io {
         }
         void send_keepalive_unreliable(udp_peer_state& ps) noexcept {
             msg_keepalive2 k{};
-            k.session_id = io::htonl(ps.session_id);
+            k.session_id = ::io::h2nl(ps.session_id);
 
             const u32 seq = ps.send_seq++;
             const u32 ack = ps.recv_win.ack();
@@ -1202,7 +1423,7 @@ namespace io {
             if (ps->hs == udp_peer_state::HS_ESTABLISHED) {
                 msg_disconnect d{};
                 d.reason = (u8)why;
-                d.session_id = io::htonl(ps->session_id);
+                d.session_id = ::io::h2nl(ps->session_id);
 
                 const bool sent = ps->rel_ready // Prefer reliable if available, fallback to unreliable
                     ? send_reliable(*ps, MSG_DISCONNECT, byte_view{ (u8*)&d, sizeof(d) }, now_ms)
@@ -1298,9 +1519,9 @@ namespace io {
                 for (usize i = 0; i < sizeof(h); ++i) ((u8*)&h)[i] = payload.data()[i];
 
                 // payload fields are in network order -> host
-                h.mtu = io::ntohs(h.mtu);
-                h.features = io::ntohs(h.features);
-                h.client_nonce = io::ntohl(h.client_nonce);
+                h.mtu          = ::io::n2hs(h.mtu);
+                h.features     = ::io::n2hs(h.features);
+                h.client_nonce = ::io::n2hl(h.client_nonce);
 
                 ps.client_nonce = h.client_nonce;
                 ps.features = h.features;
@@ -1308,8 +1529,10 @@ namespace io {
 
                 // issue cookie challenge
                 msg_cookie c{};
-                c.cookie = io::htonll(cookie_make(server_cookie_secret, ps.ep, ps.client_nonce, now_ms));
-                c.nonce_echo = io::htonl(ps.client_nonce);
+                /*c.cookie =*/ cookie_tag16(io::byte_view_mut_n<16>{ c.cookie },
+                                            io::byte_view_n<32>{ server_cookie_secret },
+                                            ps.ep, ps.client_nonce, now_ms);
+                c.nonce_echo = ::io::h2nl(ps.client_nonce);
 
                 // send unreliable (challenge); no session yet
                 (void)send_to_peer(ps.ep, MSG_COOKIE, UdpChan::Unreliable,
@@ -1327,13 +1550,14 @@ namespace io {
                 for (usize i = 0; i < sizeof(h2); ++i) ((u8*)&h2)[i] = payload.data()[i];
 
                 // host
-                const u64 cookie = io::ntohll(h2.cookie);
-                const u32 nonce = io::ntohl(h2.client_nonce);
-                const u16 mtu = io::ntohs(h2.mtu);
-                const u16 feats = io::ntohs(h2.features);
+                const u32 nonce  = ::io::n2hl(h2.client_nonce);
+                const u16 mtu    = ::io::n2hs(h2.mtu);
+                const u16 feats  = ::io::n2hs(h2.features);
 
-                if (!cookie_check(cookie, server_cookie_secret, ps.ep, nonce, now_ms)) return false;
-
+                if (!cookie_check(io::byte_view_n<16>{ h2.cookie },
+                                  io::byte_view_n<32>{ server_cookie_secret },
+                                  ps.ep, nonce, now_ms))
+                    return false;
                 ps.client_nonce = nonce;
                 ps.features = feats;
                 ps.mtu = clamp_mtu(mtu);
@@ -1345,9 +1569,9 @@ namespace io {
                     cb.on_established(cb.ud, ps.ep, ps.session_id);
 
                 msg_welcome w{};
-                w.mtu = io::htons(ps.mtu);
-                w.features = io::htons(ps.features);
-                w.session_id = io::htonl(ps.session_id);
+                w.mtu        = ::io::h2ns(ps.mtu);
+                w.features   = ::io::h2ns(ps.features);
+                w.session_id = ::io::h2nl(ps.session_id);
 
                 (void)send_to_peer(ps.ep, MSG_WELCOME, UdpChan::Reliable,
                     byte_view{ (u8*)&w, sizeof(w) }, now_ms);
@@ -1362,15 +1586,15 @@ namespace io {
                 msg_cookie c{};
                 for (usize i = 0; i < sizeof(c); ++i) ((u8*)&c)[i] = payload.data()[i];
 
-                const u64 cookie = io::ntohll(c.cookie);
-                const u32 nonce_echo = io::ntohl(c.nonce_echo);
+                const u32 nonce_echo = ::io::n2hl(c.nonce_echo);
                 if (nonce_echo != client_nonce) return false;
 
                 msg_hello2 h2{};
-                h2.cookie = io::htonll(cookie);
-                h2.client_nonce = io::htonl(client_nonce);
-                h2.mtu = io::htons(desired_mtu);
-                h2.features = io::htons(desired_features);
+                for (int i = 0; i < 16; ++i)
+                    h2.cookie[i] = c.cookie[i];
+                h2.client_nonce = ::io::h2nl(client_nonce);
+                h2.mtu          = ::io::h2ns(desired_mtu);
+                h2.features     = ::io::h2ns(desired_features);
 
                 (void)send_to_peer(ps.ep, MSG_HELLO2, UdpChan::Reliable,
                     byte_view{ (u8*)&h2, sizeof(h2) }, now_ms);
@@ -1386,24 +1610,26 @@ namespace io {
                 msg_welcome w{};
                 for (usize i = 0; i < sizeof(w); ++i) ((u8*)&w)[i] = payload.data()[i];
 
-                ps.mtu = clamp_mtu(io::ntohs(w.mtu));
-                ps.features = io::ntohs(w.features);
-                ps.session_id = io::ntohl(w.session_id);
+                ps.mtu        = clamp_mtu(::io::n2hs(w.mtu));
+                ps.features   = ::io::n2hs(w.features);
+                ps.session_id = ::io::n2hl(w.session_id);
                 ps.hs = udp_peer_state::HS_ESTABLISHED;
 
                 session_id = ps.session_id; // store in loop
 
                 if (!was_established && cb.on_established)
                     cb.on_established(cb.ud, ps.ep, ps.session_id);
+                secure_zero(&client_nonce, sizeof(client_nonce));
                 return true;
             }
 
             return false;
         }
-        bool start_client_handshake(Endpoint server, u32 nonce, u16 mtu, u16 feats, u64 now_ms) noexcept {
+        bool start_client_handshake(Endpoint server, u16 mtu, u16 feats, u64 now_ms) noexcept {
             is_server = false;
             server_ep = server;
-            client_nonce = nonce ? nonce : 0x12345678u;
+            (void)os_entropy(&client_nonce, sizeof(client_nonce));
+            if (client_nonce == 0) client_nonce = 946930; // avoid zero
             desired_mtu = clamp_mtu(mtu);
             desired_features = feats;
 
@@ -1412,15 +1638,20 @@ namespace io {
             if (!ps) return false;
 
             msg_hello h{};
-            h.mtu = io::htons(desired_mtu);
-            h.features = io::htons(desired_features);
-            h.client_nonce = io::htonl(client_nonce);
+            h.mtu          = ::io::h2ns(desired_mtu);
+            h.features     = ::io::h2ns(desired_features);
+            h.client_nonce = ::io::h2nl(client_nonce);
 
             ps->hs = udp_peer_state::HS_NONE;
             ps->hs_deadline_ms = now_ms + HANDSHAKE_TIMEOUT_MS;
 
             return send_to_peer(server_ep, MSG_HELLO, UdpChan::Unreliable,
                 byte_view((u8*)&h, sizeof(h)), now_ms);
+        }
+
+    private:
+        static inline void drop(UdpCallbacks& cb, Endpoint from, Error why, DropReason r) noexcept {
+            if (cb.on_drop) cb.on_drop(cb.ud, from, why, r);
         }
 
     public:
@@ -1447,7 +1678,7 @@ namespace io {
                 (void)WSAPoll(fds, (ULONG)count, timeout_ms);
 
                 // 1) send queued refs (arena-backed)
-                const u64 now_ms = io::monotonic_ms();
+                const u64 now_ms = monotonic_ms();
                 flush_outgoing(udp);        
                 tick_reliable(now_ms);
                 tick_sessions(udp, cb, now_ms);
@@ -1460,7 +1691,7 @@ namespace io {
                         if (n <= 0) break;
 
                         if (n < (int)sizeof(UdpHeader)) {
-                            if (cb.on_drop) cb.on_drop(cb.ud, from, Error::Generic);
+                            drop(cb, from, Error::Generic, DropReason::TooSmall);
                             continue;
                         }
 
@@ -1472,14 +1703,18 @@ namespace io {
 
                         udp_header_wire_to_host(h);
 
-                        if (h.magic != UDP_MAGIC || h.version != UDP_VERSION) {
-                            if (cb.on_drop) cb.on_drop(cb.ud, from, Error::Generic);
+                        if (h.magic != UDP_MAGIC) {
+                            drop(cb, from, Error::Generic, DropReason::BadMagic);
+                            continue;
+                        }
+                        if (h.version != UDP_VERSION) {
+                            drop(cb, from, Error::Generic, DropReason::BadVer);
                             continue;
                         }
 
                         const int payload_len = (int)h.payload_len;
                         if (payload_len < 0 || (int)sizeof(UdpHeader) + payload_len != n) {
-                            if (cb.on_drop) cb.on_drop(cb.ud, from, Error::Generic);
+                            drop(cb, from, Error::Generic, DropReason::BadLen);
                             continue;
                         }
 
@@ -1489,7 +1724,7 @@ namespace io {
                         if (is_handshake_msg(h.type)) {
                             udp_peer_state* ps = get_peer_create(from);
                             if (!ps) {
-                                if (cb.on_drop) cb.on_drop(cb.ud, from, Error::Generic);
+                                drop(cb, from, Error::Generic, DropReason::FullPeerTable);
                                 continue;
                             }
                             ps->last_rx_ms = now_ms; // just received something (put now_ms earlier)
@@ -1502,7 +1737,13 @@ namespace io {
                                 : handle_handshake_client(*ps, cb, h.type, payload_view, now_ms);
                             // if handshake msg invalid -> drop
                             if (ok_hs) continue;
-                            if (cb.on_drop) cb.on_drop(cb.ud, from, Error::Generic);
+
+                            // If already established, treat stray HS as noise (no drop spam)
+                            if (ps->hs == udp_peer_state::HS_ESTABLISHED) {
+                                continue;
+                            } 
+
+                            drop(cb, from, Error::Generic, DropReason::BadHs);
                             continue;
                         }
 
@@ -1530,15 +1771,15 @@ namespace io {
                             // ignore if not established
                             if (ps->hs != udp_peer_state::HS_ESTABLISHED) continue; 
                             if (payload_len != (int)sizeof(msg_disconnect)) {
-                                if (cb.on_drop) cb.on_drop(cb.ud, from, Error::Generic);
+                                drop(cb, from, Error::Generic, DropReason::BadCtrl);
                                 continue;
                             }
                             msg_disconnect d{};
                             for (usize i = 0; i < sizeof(d); ++i) ((u8*)&d)[i] = payload_view.data()[i];
 
-                            const u32 sid = io::ntohl(d.session_id);
+                            const u32 sid = ::io::n2hl(d.session_id);
                             if (sid != ps->session_id) {
-                                if (cb.on_drop) cb.on_drop(cb.ud, from, Error::Generic);
+                                drop(cb, from, Error::Generic, DropReason::BadCtrl);
                                 continue;
                             }
                             handle_disconnect(cb, *ps, (DisconnectReason)d.reason);
@@ -1554,7 +1795,7 @@ namespace io {
                         // MTU contract: drop if header says payload_len exceeds negotiated cap
                         const u16 cap = mtu_payload_cap(ps->mtu);
                         if ((u32)payload_len > (u32)cap) {
-                            if (cb.on_drop) cb.on_drop(cb.ud, from, Error::Generic);
+                            drop(cb, from, Error::Generic, DropReason::BadMtu);
                             continue;
                         }
 
@@ -1571,19 +1812,23 @@ namespace io {
         }
 
 #elif defined(__linux__)
-        int ep{ 0 }; // MUST be initialized with `-1` later
+        int ep{ -1 }; // MUST be initialized with `-1`
 
         IO_NODISCARD bool init_epoll() noexcept {
-            ep = ::epoll_create1(0);
-            return ep >= 0;
+            const long r = native::sys_epoll_create1(0);
+            if (native::is_err(r)) return false;
+            ep = (int)r;
+            return true;
         }
 
         IO_NODISCARD bool add(Socket& s) noexcept {
+            using namespace native;
             if (ep < 0) return false;
             epoll_event ev{};
-            ev.events = EPOLLIN; // read only; avoid always-writable spin
+            ev.events = k_epollin; // read only; avoid always-writable spin
             ev.data.fd = (int)s.native();
-            return ::epoll_ctl(ep, EPOLL_CTL_ADD, (int)s.native(), &ev) == 0;
+            const long r = sys_epoll_ctl(ep, k_epoll_ctl_add, (int)s.native(), &ev);
+            return !is_err(r);
         }
 
         void run_udp(Socket& udp, UdpCallbacks& cb,
@@ -1591,22 +1836,30 @@ namespace io {
         {
             if (ep < 0 && !init_epoll()) return;
             (void)add(udp);
+            cb_live = &cb;
 
-            epoll_event events[16]{};
+            native::epoll_event events[16]{};
 
             while (running) {
                 const int timeout_ms = sendq.empty() ? 10 : 0;
-                const int n_ev = ::epoll_wait(ep, events, 16, timeout_ms);
+                const long n_ev_l = native::sys_epoll_wait(ep, events, 16, timeout_ms);
+                int n_ev = 0;
+                if (native::is_err(n_ev_l)) {
+                    if (native::err_no(n_ev_l) == native::k_eintr) n_ev = 0;
+                    else n_ev = 0;
+                } else {
+                    n_ev = (int)n_ev_l;
+                }
 
                 // 1) send queued refs (arena-backed)
-                const u64 now_ms = io::monotonic_ms();
+                const u64 now_ms = monotonic_ms();
                 flush_outgoing(udp);
                 tick_reliable(now_ms);
                 tick_sessions(udp, cb, now_ms);
 
                 // 2) drain receives
                 for (int i = 0; i < n_ev; ++i) {
-                    if ((events[i].events & EPOLLIN) == 0) continue;
+                    if ((events[i].events & native::k_epollin) == 0) continue;
 
                     for (;;) {
                         Endpoint from{};
@@ -1614,7 +1867,7 @@ namespace io {
                         if (n <= 0) break;
 
                         if (n < (int)sizeof(UdpHeader)) {
-                            if (cb.on_drop) cb.on_drop(cb.ud, from, Error::Generic);
+                            drop(cb, from, Error::Generic, DropReason::TooSmall);
                             continue;
                         }
 
@@ -1626,14 +1879,18 @@ namespace io {
 
                         udp_header_wire_to_host(h);
 
-                        if (h.magic != UDP_MAGIC || h.version != UDP_VERSION) {
-                            if (cb.on_drop) cb.on_drop(cb.ud, from, Error::Generic);
+                        if (h.magic != UDP_MAGIC) {
+                            drop(cb, from, Error::Generic, DropReason::BadMagic);
+                            continue;
+                        }
+                        if (h.version != UDP_VERSION) {
+                            drop(cb, from, Error::Generic, DropReason::BadVer);
                             continue;
                         }
 
                         const int payload_len = (int)h.payload_len;
                         if (payload_len < 0 || (int)sizeof(UdpHeader) + payload_len != n) {
-                            if (cb.on_drop) cb.on_drop(cb.ud, from, Error::Generic);
+                            drop(cb, from, Error::Generic, DropReason::BadLen);
                             continue;
                         }
 
@@ -1643,7 +1900,7 @@ namespace io {
                         if (is_handshake_msg(h.type)) {
                             udp_peer_state* ps = get_peer_create(from);
                             if (!ps) {
-                                if (cb.on_drop) cb.on_drop(cb.ud, from, Error::Generic);
+                                drop(cb, from, Error::Generic, DropReason::FullPeerTable);
                                 continue;
                             }
                             ps->last_rx_ms = now_ms; // just received something (put now_ms earlier)
@@ -1655,7 +1912,11 @@ namespace io {
                                 ? handle_handshake_server(*ps, cb, h.type, payload_view, now_ms)
                                 : handle_handshake_client(*ps, cb, h.type, payload_view, now_ms);
                             if (ok_hs) continue;
-                            if (cb.on_drop) cb.on_drop(cb.ud, from, Error::Generic);
+                            
+                            // If already established, treat stray HS as noise (no drop spam)
+                            if (ps->hs == udp_peer_state::HS_ESTABLISHED)
+                                continue;
+                            drop(cb, from, Error::Generic, DropReason::BadHs);
                             continue;
                         }
 
@@ -1682,15 +1943,15 @@ namespace io {
                             // ignore if not established
                             if (ps->hs != udp_peer_state::HS_ESTABLISHED) continue; 
                             if (payload_len != (int)sizeof(msg_disconnect)) {
-                                if (cb.on_drop) cb.on_drop(cb.ud, from, Error::Generic);
+                                drop(cb, from, Error::Generic, DropReason::BadCtrl);
                                 continue;
                             }
                             msg_disconnect d{};
                             for (usize i = 0; i < sizeof(d); ++i) ((u8*)&d)[i] = payload_view.data()[i];
 
-                            const u32 sid = io::ntohl(d.session_id);
+                            const u32 sid = ::io::n2hl(d.session_id);
                             if (sid != ps->session_id) {
-                                if (cb.on_drop) cb.on_drop(cb.ud, from, Error::Generic);
+                                drop(cb, from, Error::Generic, DropReason::BadCtrl);
                                 continue;
                             }
                             handle_disconnect(cb, *ps, (DisconnectReason)d.reason);
@@ -1703,7 +1964,7 @@ namespace io {
                         // MTU contract: drop if header says payload_len exceeds negotiated cap
                         const u16 cap = mtu_payload_cap(ps->mtu);
                         if ((u32)payload_len > (u32)cap) {
-                            if (cb.on_drop) cb.on_drop(cb.ud, from, Error::Generic);
+                            drop(cb, from, Error::Generic, DropReason::BadMtu);
                             continue;
                         }
 
@@ -1720,14 +1981,14 @@ namespace io {
             }
         }
 #endif
-    };
+    }; // struct EventLoop
 
 } // namespace io
 
 
-inline const io::native::Out& operator<<(const io::native::Out& t, const io::IP& ip) noexcept {
+inline const io::Out& operator<<(const io::Out& t, const io::IP& ip) noexcept {
 #ifdef IO_TERMINAL
-    io::u32 h = io::ntohl(ip.addr_be);
+    io::u32 h = io::n2hl(ip.addr_be);
     t << ((h >> 24) & 0xFFu) << '.'
       << ((h >> 16) & 0xFFu) << '.'
       << ((h >> 8 ) & 0xFFu) << '.'
@@ -1736,9 +1997,37 @@ inline const io::native::Out& operator<<(const io::native::Out& t, const io::IP&
     return t;
 }
 
-inline const io::native::Out& operator<<(const io::native::Out& t, const io::Endpoint& ep) noexcept {
+inline const io::Out& operator<<(const io::Out& t, const io::Endpoint& ep) noexcept {
 #ifdef IO_TERMINAL
-    t << io::IP(ep.addr_be) << ':' << (io::u32)io::ntohs(ep.port_be);
+    t << io::IP(ep.addr_be) << ':' << (io::u32)io::n2hs(ep.port_be);
+#endif
+    return t;
+}
+
+inline const io::Out& operator<<(const io::Out& t, io::DropReason dr) noexcept {
+#ifdef IO_TERMINAL
+    t << io::drop_reason_str(dr);
+#endif
+    return t;
+}
+
+inline const io::Out& operator<<(const io::Out& t, io::DisconnectReason dr) noexcept {
+#ifdef IO_TERMINAL
+    t << io::disconnect_reason_str(dr);
+#endif
+    return t;
+}
+
+inline const io::Out& operator<<(const io::Out& t, io::Protocol proto) noexcept {
+#ifdef IO_TERMINAL
+    t << (proto==io::Protocol::TCP ? "TCP" : "UDP");
+#endif
+    return t;
+}
+
+inline const io::Out& operator<<(const io::Out& t, io::Error err) noexcept {
+#ifdef IO_TERMINAL
+    t << io::error_str(err);
 #endif
     return t;
 }

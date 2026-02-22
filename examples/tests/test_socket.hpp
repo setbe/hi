@@ -8,10 +8,10 @@ using namespace io;
 namespace test_socket {
     static constexpr u16 SERVER_PORT = 7777;
 
-    static inline Endpoint server_ep() {
+    static inline Endpoint server_ep() noexcept {
         Endpoint ep{};
         ep.addr_be = IP::from_string("127.0.0.1");
-        ep.port_be = io::htons(SERVER_PORT);
+        ep.port_be = io::h2ns(SERVER_PORT);
         return ep;
     }
 
@@ -19,7 +19,7 @@ namespace test_socket {
         return e == Error::WouldBlock || e == Error::Again;
     }
 
-    static inline bool recv_one(Socket& s, Endpoint& from, u8* buf, int cap, int& out_n, u64 timeout_ms) {
+    static inline bool recv_one(Socket& s, Endpoint& from, u8* buf, int cap, int& out_n, u64 timeout_ms) noexcept {
         const u64 start = monotonic_ms();
         for (;;) {
             out_n = s.recv_from(from, buf, cap);
@@ -30,7 +30,7 @@ namespace test_socket {
         }
     }
 
-    static inline void fill_prng(u32& st, u8* dst, u32 n) {
+    static inline void fill_prng(u32& st, u8* dst, u32 n) noexcept {
         // xorshift32 deterministic
         for (u32 i = 0; i < n; ++i) {
             st ^= st << 13;
@@ -43,11 +43,10 @@ namespace test_socket {
     // Build raw datagram with arbitrary header fields (host order -> wire), and arbitrary payload copy length.
     // payload_len_in_header may intentionally mismatch payload_bytes_to_copy.
     static inline u32 build_udp_datagram(u8* out, u32 cap,
-        u32 magic, u16 version, u32 seq, u32 ack, u64 ack_bits,
-        u8 chan, u8 type,
-        const u8* payload, u16 payload_len_in_header,
-        u32 payload_bytes_to_copy)
-    {
+                                         u32 magic, u16 version, u32 seq, u32 ack, u64 ack_bits,
+                                         u8 chan, u8 type,
+                                         const u8* payload, u16 payload_len_in_header,
+                                         u32 payload_bytes_to_copy) noexcept {
         const u32 need = (u32)sizeof(UdpHeader) + payload_bytes_to_copy;
         if (need > cap) return 0;
 
@@ -73,17 +72,17 @@ namespace test_socket {
         return need;
     }
 
-    static inline bool send_raw(Socket& s, Endpoint to, const u8* bytes, u32 len) {
+    static inline bool send_raw(Socket& s, Endpoint to, const u8* bytes, u32 len) noexcept {
         const int sent = s.send_to(to, bytes, (int)len);
         return sent == (int)len;
     }
 
-    static inline Socket make_udp_socket() {
+    static inline Socket make_udp_socket() noexcept {
         Socket s{};
         REQUIRE(s.open(Protocol::UDP));
         Endpoint bind_ep{};
         bind_ep.addr_be = IP::from_string("0.0.0.0");
-        bind_ep.port_be = io::htons(0);
+        bind_ep.port_be = io::h2ns(0);
         REQUIRE(s.bind(bind_ep));
         REQUIRE(s.set_blocking(false));
         return s;
@@ -99,7 +98,7 @@ namespace test_socket {
         u32 payload_n = 0;
     };
 
-    static inline bool parse_if_valid_framed(const Endpoint& from, const u8* rx, int n, Parsed& out) {
+    static inline bool parse_if_valid_framed(const Endpoint& from, const u8* rx, int n, Parsed& out) noexcept {
         if (!rx || n < (int)sizeof(UdpHeader)) return false;
 
         UdpHeader h{};
@@ -119,7 +118,7 @@ namespace test_socket {
 
     // Drain for a short window and REQUIRE that we do NOT observe COOKIE/WELCOME.
     // (We ignore malformed frames/magic/version, because those are "noise".)
-    static inline void require_no_cookie_or_welcome(Socket& s, Endpoint srv, u8* rx, int cap, u64 window_ms) {
+    static inline void require_no_cookie_or_welcome(Socket& s, Endpoint srv, u8* rx, int cap, u64 window_ms) noexcept {
         const u64 until = monotonic_ms() + window_ms;
         while (monotonic_ms() < until) {
             Endpoint from{};
@@ -140,107 +139,116 @@ namespace test_socket {
         }
     }
 
-    static inline void build_hello(msg_hello& h, u16 mtu, u16 feats, u32 nonce) {
-        h.mtu = io::htons(mtu);
-        h.features = io::htons(feats);
-        h.client_nonce = io::htonl(nonce);
+    static inline void build_hello(msg_hello& h, u16 mtu, u16 feats, u32 nonce) noexcept {
+        h.mtu = io::h2ns(mtu);
+        h.features = io::h2ns(feats);
+        h.client_nonce = io::h2nl(nonce);
     }
-    static inline void build_hello2(msg_hello2& h2, u64 cookie, u32 nonce, u16 mtu, u16 feats) {
-        h2.cookie = io::htonll(cookie);
-        h2.client_nonce = io::htonl(nonce);
-        h2.mtu = io::htons(mtu);
-        h2.features = io::htons(feats);
-    }
+    static inline void build_hello2(msg_hello2& h2,
+                                io::byte_view_n<16> cookie16,
+                                u32 nonce, u16 mtu, u16 feats) noexcept {
+    for (int i = 0; i < 16; ++i) h2.cookie[i] = cookie16.data()[i];
+    h2.client_nonce = io::h2nl(nonce);
+    h2.mtu = io::h2ns(mtu);
+    h2.features = io::h2ns(feats);
+}
 
-    // Honest handshake with retries.
-    // Returns true if HELLO->COOKIE->HELLO2->WELCOME is completed.
-    static inline bool honest_handshake(Socket& s, Endpoint srv,
-        u32 nonce, u16 mtu, u16 feats,
-        u64 per_step_timeout_ms,
-        u32 hello_retries)
-    {
-        constexpr u32 BUF_CAP = 4096;
-        u8 tx[BUF_CAP]{};
-        u8 rx[BUF_CAP]{};
+// Honest handshake with retries.
+// Returns true if HELLO->COOKIE->HELLO2->WELCOME is completed.
+static inline bool honest_handshake(Socket& s, Endpoint srv,
+                                    u32 nonce, u16 mtu, u16 feats,
+                                    u64 per_step_timeout_ms,
+                                    u32 hello_retries) noexcept {
+    constexpr u32 BUF_CAP = 4096;
+    u8 tx[BUF_CAP]{};
+    u8 rx[BUF_CAP]{};
 
-        // --- Step 1: send HELLO (retry if needed), wait COOKIE
-        u64 cookie = 0;
-        for (u32 attempt = 0; attempt < hello_retries && cookie == 0; ++attempt) {
-            msg_hello h{};
-            build_hello(h, mtu, feats, nonce);
+    // --- Step 1: send HELLO (retry if needed), wait COOKIE
+    io::u8 cookie16[16]{};
+    bool have_cookie = false;
 
-            const u32 n0 = build_udp_datagram(
-                tx, BUF_CAP,
-                UDP_MAGIC, UDP_VERSION,
-                /*seq=*/1u + attempt, /*ack=*/0, /*ack_bits=*/0,
-                (u8)UdpChan::Unreliable, MSG_HELLO,
-                (const u8*)&h, (u16)sizeof(h), (u32)sizeof(h)
-            );
-            if (!n0) return false;
-            (void)send_raw(s, srv, tx, n0);
+    for (u32 attempt = 0; attempt < hello_retries && !have_cookie; ++attempt) {
+        msg_hello h{};
+        build_hello(h, mtu, feats, nonce);
 
-            Endpoint from{};
-            int got = 0;
-            if (!recv_one(s, from, rx, (int)BUF_CAP, got, per_step_timeout_ms))
-                continue;
-            if (!endpoint_eq(from, srv))
-                continue;
+        const u32 n0 = build_udp_datagram(
+            tx, BUF_CAP,
+            UDP_MAGIC, UDP_VERSION,
+            /*seq=*/1u + attempt, /*ack=*/0, /*ack_bits=*/0,
+            (u8)UdpChan::Unreliable, MSG_HELLO,
+            (const u8*)&h, (u16)sizeof(h), (u32)sizeof(h)
+        );
+        if (!n0) return false;
+        (void)send_raw(s, srv, tx, n0);
 
-            Parsed p{};
-            if (!parse_if_valid_framed(from, rx, got, p)) continue;
-            if (p.h.type != MSG_COOKIE) continue;
-            if (p.payload_n != sizeof(msg_cookie)) continue;
+        Endpoint from{};
+        int got = 0;
+        if (!recv_one(s, from, rx, (int)BUF_CAP, got, per_step_timeout_ms))
+            continue;
+        if (!endpoint_eq(from, srv))
+            continue;
 
-            msg_cookie c{};
-            for (usize i = 0; i < sizeof(c); ++i) ((u8*)&c)[i] = p.payload[i];
+        Parsed p{};
+        if (!parse_if_valid_framed(from, rx, got, p)) continue;
+        if (p.h.type != MSG_COOKIE) continue;
+        if (p.payload_n != sizeof(msg_cookie)) continue;
 
-            const u32 nonce_echo = io::ntohl(c.nonce_echo);
-            const u64 ck = io::ntohll(c.cookie);
-            if (nonce_echo != nonce) continue;
-            if (ck == 0) continue;
+        msg_cookie c{};
+        for (usize i = 0; i < sizeof(c); ++i) ((u8*)&c)[i] = p.payload[i];
 
-            cookie = ck;
+        const u32 nonce_echo = io::n2hl(c.nonce_echo);
+        if (nonce_echo != nonce) continue;
+
+        // cookie is opaque 16 bytes: NO endian conversions
+        bool all_zero = true;
+        for (int i = 0; i < 16; ++i) {
+            cookie16[i] = c.cookie[i];
+            all_zero &= (cookie16[i] == 0);
         }
-        if (cookie == 0) return false;
+        if (all_zero) continue;
 
-        // --- Step 2: send HELLO2, wait WELCOME (a couple retries)
-        for (u32 attempt = 0; attempt < 3; ++attempt) {
-            msg_hello2 h2{};
-            build_hello2(h2, cookie, nonce, mtu, feats);
-
-            const u32 n2 = build_udp_datagram(
-                tx, BUF_CAP,
-                UDP_MAGIC, UDP_VERSION,
-                /*seq=*/100u + attempt, /*ack=*/0, /*ack_bits=*/0,
-                (u8)UdpChan::Reliable, MSG_HELLO2,
-                (const u8*)&h2, (u16)sizeof(h2), (u32)sizeof(h2)
-            );
-            if (!n2) return false;
-            (void)send_raw(s, srv, tx, n2);
-
-            Endpoint from{};
-            int got = 0;
-            if (!recv_one(s, from, rx, (int)BUF_CAP, got, per_step_timeout_ms))
-                continue;
-            if (!endpoint_eq(from, srv))
-                continue;
-
-            Parsed p{};
-            if (!parse_if_valid_framed(from, rx, got, p)) continue;
-            if (p.h.type != MSG_WELCOME) continue;
-            if (p.payload_n != sizeof(msg_welcome)) continue;
-
-            msg_welcome w{};
-            for (usize i = 0; i < sizeof(w); ++i) ((u8*)&w)[i] = p.payload[i];
-
-            const u32 sid = io::ntohl(w.session_id);
-            const u16 agreed_mtu = io::ntohs(w.mtu);
-            if (sid == 0) continue;
-            if (agreed_mtu < MIN_MTU || agreed_mtu > MAX_MTU) continue;
-
-            return true;
-        }
-
-        return false;
+        have_cookie = true;
     }
+    if (!have_cookie) return false;
+
+    // --- Step 2: send HELLO2, wait WELCOME (a couple retries)
+    for (u32 attempt = 0; attempt < 3; ++attempt) {
+        msg_hello2 h2{};
+        build_hello2(h2, io::byte_view_n<16>{ cookie16 }, nonce, mtu, feats);
+
+        const u32 n2 = build_udp_datagram(
+            tx, BUF_CAP,
+            UDP_MAGIC, UDP_VERSION,
+            /*seq=*/100u + attempt, /*ack=*/0, /*ack_bits=*/0,
+            (u8)UdpChan::Reliable, MSG_HELLO2,
+            (const u8*)&h2, (u16)sizeof(h2), (u32)sizeof(h2)
+        );
+        if (!n2) return false;
+        (void)send_raw(s, srv, tx, n2);
+
+        Endpoint from{};
+        int got = 0;
+        if (!recv_one(s, from, rx, (int)BUF_CAP, got, per_step_timeout_ms))
+            continue;
+        if (!endpoint_eq(from, srv))
+            continue;
+
+        Parsed p{};
+        if (!parse_if_valid_framed(from, rx, got, p)) continue;
+        if (p.h.type != MSG_WELCOME) continue;
+        if (p.payload_n != sizeof(msg_welcome)) continue;
+
+        msg_welcome w{};
+        for (usize i = 0; i < sizeof(w); ++i) ((u8*)&w)[i] = p.payload[i];
+
+        const u32 sid = io::n2hl(w.session_id);
+        const u16 agreed_mtu = io::n2hs(w.mtu);
+        if (sid == 0) continue;
+        if (agreed_mtu < MIN_MTU || agreed_mtu > MAX_MTU) continue;
+
+        return true;
+    }
+
+    return false;
+}
 } // namespace test

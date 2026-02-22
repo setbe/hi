@@ -14,7 +14,7 @@
 // - cl::poly1305::derive_otk_from_chacha20(key, nonce, out_otk32)
 // - cl::poly1305::mac_chacha20(key, nonce, msg, out_tag16)
 // - cl::poly1305::verify_chacha20(key, nonce, msg, tag16)
-// - cl::poly1305::ct_equal16(a, b)
+// - cl::poly1305::ct_equal(a, b)
 
 namespace test_poly1305 {
     using u8 = io::u8;
@@ -193,10 +193,10 @@ namespace test_poly1305 {
         u8 b[16]{};
 
         for (usize i = 0; i < 16; ++i) { a[i] = (u8)i; b[i] = (u8)i; }
-        REQUIRE(cl::poly1305::ct_equal16(io::as_view(a), io::as_view(b)));
+        REQUIRE(cl::poly1305::ct_equal(io::as_view(a), io::as_view(b)));
 
         b[7] ^= 0x01;
-        REQUIRE_FALSE(cl::poly1305::ct_equal16(io::as_view(a), io::as_view(b)));
+        REQUIRE_FALSE(cl::poly1305::ct_equal(io::as_view(a), io::as_view(b)));
     }
 
 

@@ -1,5 +1,4 @@
-﻿#pragma once
-#define CATCH_CONFIG_MAIN
+﻿#define CATCH_CONFIG_MAIN
 #define IO_IMPLEMENTATION
 #include "test_socket.hpp"
 
@@ -13,7 +12,8 @@ using Loop = EventLoop<1200, 2048>;
 
 struct Counters {
     std::atomic<u32> established{ 0 };
-    std::atomic<u32> drops{ 0 };
+    std::atomic<u32> drops_total{0};
+    std::atomic<u32> drops_reason[9]{}; // 0 unused
     std::atomic<u32> user_pkts{ 0 };
     std::atomic<u32> disconnects{ 0 };
     std::atomic<u32> last_reason{ 0 };
@@ -22,8 +22,11 @@ struct Counters {
 static void cb_established(void* ud, Endpoint, u32) {
     ((Counters*)ud)->established.fetch_add(1, std::memory_order_relaxed);
 }
-static void cb_drop(void* ud, Endpoint, Error) {
-    ((Counters*)ud)->drops.fetch_add(1, std::memory_order_relaxed);
+static void cb_drop(void* ud, Endpoint, Error, DropReason r) {
+    auto* c = (Counters*)ud;
+    c->drops_total.fetch_add(1, std::memory_order_relaxed);
+    const u32 idx = (u32)r;
+    if (idx < 8) c->drops_reason[idx].fetch_add(1, std::memory_order_relaxed);
 }
 static void cb_packet(void* ud, Endpoint, u8 type, UdpChan, byte_view) {
     if (type >= 32)
@@ -67,7 +70,7 @@ static std::vector<u8> make_disconnect(u32 sid, DisconnectReason r,
     u32 seq = 1, u32 ack = 0, u64 ack_bits = 0)
 {
     msg_disconnect d{};
-    d.session_id = io::htonl(sid);
+    d.session_id = io::h2nl(sid);
     d.reason = (u8)r;
 
     return make_datagram(UDP_MAGIC, UDP_VERSION,
@@ -87,7 +90,7 @@ TEST_CASE("server drops malformed packets and never establishes", "[udp][fuzz]")
     REQUIRE(server.open(Protocol::UDP));
     Endpoint bind{};
     bind.addr_be = IP::from_string("127.0.0.1");
-    bind.port_be = io::htons(test_socket::SERVER_PORT);
+    bind.port_be = io::h2ns(test_socket::SERVER_PORT);
     REQUIRE(server.bind(bind));
     (void)server.set_blocking(false);
 
@@ -114,13 +117,13 @@ TEST_CASE("server drops malformed packets and never establishes", "[udp][fuzz]")
     REQUIRE(atk.open(Protocol::UDP));
     Endpoint atk_bind{};
     atk_bind.addr_be = IP::from_string("127.0.0.1");
-    atk_bind.port_be = io::htons(0);
+    atk_bind.port_be = io::h2ns(0);
     REQUIRE(atk.bind(atk_bind));
     (void)atk.set_blocking(false);
 
     Endpoint to{};
     to.addr_be = IP::from_string("127.0.0.1");
-    to.port_be = io::htons(test_socket::SERVER_PORT);
+    to.port_be = io::h2ns(test_socket::SERVER_PORT);
 
     // 1) too short
     {
@@ -168,8 +171,10 @@ TEST_CASE("server drops malformed packets and never establishes", "[udp][fuzz]")
 
     CHECK(ctr.established.load() == 0);
     CHECK(ctr.user_pkts.load() == 0);
-    CHECK(ctr.drops.load() >= 1); // at least short/bad packets should count as drops
+    CHECK(ctr.drops_total.load() >= 1); // at least short/bad packets should count as drops
     CHECK(ctr.disconnects.load() == 0);
+    CHECK(ctr.drops_reason[(u32)DropReason::TooSmall].load() >= 1);
+    CHECK(ctr.drops_reason[(u32)DropReason::BadMagic].load() >= 1);
 
     loop.stop();
     thr.join();
@@ -188,7 +193,7 @@ TEST_CASE("registered peer: DISCONNECT triggers callback", "[udp][disconnect]") 
     REQUIRE(server.open(Protocol::UDP));
     Endpoint bind{};
     bind.addr_be = IP::from_string("127.0.0.1");
-    bind.port_be = io::htons(test_socket::SERVER_PORT);
+    bind.port_be = io::h2ns(test_socket::SERVER_PORT);
     REQUIRE(server.bind(bind));
     (void)server.set_blocking(false);
 
@@ -214,13 +219,13 @@ TEST_CASE("registered peer: DISCONNECT triggers callback", "[udp][disconnect]") 
     REQUIRE(cli.open(Protocol::UDP));
     Endpoint cli_bind{};
     cli_bind.addr_be = IP::from_string("127.0.0.1");
-    cli_bind.port_be = io::htons(0);
+    cli_bind.port_be = io::h2ns(0);
     REQUIRE(cli.bind(cli_bind));
     (void)cli.set_blocking(false);
 
     Endpoint srv{};
     srv.addr_be = IP::from_string("127.0.0.1");
-    srv.port_be = io::htons(test_socket::SERVER_PORT);
+    srv.port_be = io::h2ns(test_socket::SERVER_PORT);
 
     // complete handshake (must establish)
     REQUIRE(test_socket::honest_handshake(cli, srv, 0x12345678u, 1200, FEATURE_COOKIE, 1500, 5));

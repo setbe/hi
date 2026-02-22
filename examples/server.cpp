@@ -7,7 +7,8 @@ static void on_established(void*, io::Endpoint peer, io::u32 sid) {
     io::out << "ESTABLISHED peer=" << peer << " sid=" << sid << '\n' << io::out.endl;
 }
 
-static void on_packet(void* ud, io::Endpoint from, io::u8 type, io::UdpChan chan, io::byte_view payload) {
+static void on_packet(void* ud, io::Endpoint from, io::u8 type,
+                      io::UdpChan chan, io::byte_view payload) {
     auto* loop = (Loop*)ud;
 
     io::out << "PKT type=" << (io::u32)type
@@ -24,12 +25,12 @@ static void on_packet(void* ud, io::Endpoint from, io::u8 type, io::UdpChan chan
     (void)loop->send_to_peer(from, type, chan, payload, io::monotonic_ms());
 }
 
-static void on_drop(void*, io::Endpoint from, io::Error why) {
-    io::out << "DROP from " << from << " err=" << (io::u32)why << '\n' << io::out.endl;
+static void on_drop(void*, io::Endpoint from, io::Error why, io::DropReason dr) {
+    io::out << "DROP from " << from << " err=" << why << " reason=" << dr << '\n' << io::out.endl;
 }
 
 static void on_disconnect(void*, io::Endpoint peer, io::u32 /*session_id*/, io::DisconnectReason why) {
-    io::out << "DISCONNECT peer=" << peer << " why=" << (io::u32)why << '\n' << io::out.endl;
+    io::out << "DISCONNECT peer=" << peer << " why=" << why << '\n' << io::out.endl;
 }
 
 
@@ -39,7 +40,7 @@ int main() {
 
     io::Endpoint bind_ep{};
     bind_ep.addr_be = io::IP::from_string("0.0.0.0");
-    bind_ep.port_be = io::htons(7777);
+    bind_ep.port_be = io::h2ns(7777);
     if (!udp.bind(bind_ep)) return 2;
     (void)udp.set_blocking(false);
 
