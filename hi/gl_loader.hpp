@@ -1,8 +1,11 @@
 ﻿#pragma once
 #include "io.hpp"
 
-#ifndef IO_GL_API_ES
-#   define IO_GL_API_ES 20 // version 2.0 by default
+// If you want to change OpenGL Core version in order to
+// limit your codebase on IDE level (e.g. Context Menu show-up), then
+// `#define IO_GL_API_CORE 200` (for smallest "2.0.0") once in source file before including `hi.hpp`
+#ifndef IO_GL_API_CORE
+#   define IO_GL_API_CORE 460 // max version 4.6.0 by default
 #endif
 
 // ------------------- OS-dependent Includes -------------------------
@@ -27,14 +30,6 @@
 #if !defined(NDEBUG) && !defined(_DEBUG)
 #   define _DEBUG
 #endif
-
-#ifdef _DEBUG
-#   include <assert.h>
-#else
-#   ifndef assert
-#       define assert
-#   endif
-#endif
 // ======================= OpenGL Macros ======================================
 #if defined(_WIN32)
 #   define GL_APIENTRY __stdcall
@@ -49,6 +44,10 @@ namespace gl {
     static bool loaded = false;
     static io::u8 loaded_major = 0;
     static io::u8 loaded_minor = 0;
+
+    static inline bool ver_ge(int maj, int min, int req_maj, int req_min) noexcept {
+        return (maj > req_maj) || (maj == req_maj && min >= req_min);
+    }
 
     // DefaultReturnImpl
     namespace native {
@@ -81,11 +80,16 @@ namespace gl {
     //   - Color   — clears the color buffer where the final scene pixels are stored.
     //   - Depth   — clears the depth buffer that contains per-pixel depth values.
     //   - Stencil — clears the stencil buffer if stencil testing is used.
-    IO_CONSTEXPR_VAR struct /* BufferBit */ {
+    IO_CONSTEXPR_VAR struct BufferBit {
         IO_CONSTEXPR_VAR static int Depth   = 0x00000100;
         IO_CONSTEXPR_VAR static int Stencil = 0x00000400;
         IO_CONSTEXPR_VAR static int Color   = 0x00004000;
     } buffer_bit;
+
+    IO_CONSTEXPR_VAR struct GlVersion {
+        IO_CONSTEXPR_VAR static int major = 0x821B;
+        IO_CONSTEXPR_VAR static int minor = 0x821C;
+    } gl_version;
 
     enum class Face : io::u32 {
         Front = 0x404,
@@ -119,7 +123,7 @@ namespace gl {
         // others
     };
 
-    IO_CONSTEXPR_VAR struct /* TextureUnit */ {
+    IO_CONSTEXPR_VAR struct TextureUnit {
         IO_CONSTEXPR_VAR static io::u32  _0 = 0x84C0;
         IO_CONSTEXPR_VAR static io::u32  _1 = _0+1;
         IO_CONSTEXPR_VAR static io::u32  _2 = _0+2;
@@ -238,7 +242,7 @@ namespace gl {
     };
 } // namespace gl
 
-#if IO_GL_API_ES >= 20
+#if IO_GL_API_CORE >= 200
 // ----------------------------------------------------------------------------
 // GL_VERSION_1_1    // Core state
 // ----------------------------------------------------------------------------
@@ -249,6 +253,8 @@ namespace gl {
         /*     decl */ (),
         /*     pass */ ())
 
+    GL_CALL_CUSTOM(GetIntegerv, void, (io::u32, int*), (io::u32 pname, int* data), (pname, data))
+
     GL_CALL_CUSTOM(
         /*     name */ CullFace,
         /* ret    T */ void,
@@ -257,7 +263,7 @@ namespace gl {
         /*     pass */ (static_cast<io::u32>(face)))
 
     
-    // GL_CALL_CUSTOM(PolygonMode, void,          // NOT SUPPORTED by OpenGL ES
+    // GL_CALL_CUSTOM(PolygonMode, void,          // NOT SUPPORTED by OpenGL Core
     //     /* proc   T */ (io::u32, io::u32),
     //     /*     decl */ (Face face, Polygon mode),
     //     /*     pass */ (static_cast<io::u32>(face), static_cast<io::u32>(mode)))
@@ -511,9 +517,9 @@ namespace gl {
         /* proc   T */ (io::u32, int, io::u32, unsigned char, int, const void*),
         /*     decl */ (io::u32 index, int size, DrawElementsType type, bool normalized, int stride, const void* pointer),
         /*     pass */ (index, size, static_cast<io::u32>(type), static_cast<unsigned char>(normalized), stride, pointer))
-#endif // ES 2.0
+#endif // Core 200
 
-#if IO_GL_API_ES >= 30
+#if IO_GL_API_CORE >= 300
 // ----------------------------------------------------------------------------
 // GL_VERSION_3_0_0
 // ----------------------------------------------------------------------------
@@ -542,122 +548,106 @@ namespace gl {
         /* proc   T */ (int, io::u32*),
         /*     decl */ (int n, io::u32* arrays),
         /*     pass */ (n, arrays))
-#endif // ES 3.0
+#endif // Core 3.0.0
 
 namespace gl {
 
-    // Returns empty view on success, otherwise name of the first missing proc.
-    IO_NODISCARD static inline io::char_view load(io::u8 es_major,
-                                                  io::u8 es_minor) noexcept {
-        if (loaded_major >= es_major && loaded_minor >= es_minor)
-            return {}; // already loaded
-        loaded = false;
-        loaded_major = 0;  loaded_minor = 0;
+    // returns 0,0 if query unsupported (old GL), then fallback to GL_VERSION string parse (optional)
+    static inline void query_core_version(int& maj, int& min) noexcept {
+        maj = 0; min = 0;
+        // safe even if pointers missing? -> require load of GetIntegerv first
+        gl::GetIntegerv(gl_version.major, &maj);
+        gl::GetIntegerv(gl_version.minor, &min);
+    } // query_core_version
 
-        if (!loader) return io::char_view{ "loader(null)" };
-        
-        // actual loader
+    // Load minimum set depending on *real* desktop GL core version.
+    IO_NODISCARD static inline io::char_view load_core(int core_major, int core_minor) noexcept {
+        (void)core_minor;
+        if (!loader) return io::char_view{"loader(null)"};
+
         auto must_load = [](auto& out, const char* name) noexcept -> bool {
-            using FnT = decltype(out);     // FnT == PFNxxx (function pointer)
+            using FnT = decltype(out);
             void* p = ::gl::loader(name);
             out = reinterpret_cast<FnT>(p);
             return out != nullptr;
         };
 
-        // convenience macro (local)
-#define IO_GL_ES_LOAD(Name)                                           \
-        do {                                                          \
-            if (!must_load(native::p##Name, "gl" #Name))              \
-                return io::char_view{"gl" #Name};                     \
-        } while (0)
+#define IO_GL_LOAD(Name) \
+        do { if (!must_load(native::p##Name, "gl" #Name)) return io::char_view{"gl" #Name}; } while(0)
 
-        // -------------------------
-        // ES 2.0
-        // -------------------------
-        #if IO_GL_API_ES >= 20
-        if (es_major >= 2) {
-            IO_GL_ES_LOAD(GetError);
-            IO_GL_ES_LOAD(CullFace);
-            // IO_GL_ES_LOAD(PolygonMode);
-            IO_GL_ES_LOAD(TexParameterf);
-            IO_GL_ES_LOAD(TexParameteri);
-            IO_GL_ES_LOAD(TexImage2D);
-            IO_GL_ES_LOAD(Clear);
-            IO_GL_ES_LOAD(ClearColor);
-            IO_GL_ES_LOAD(Disable);
-            IO_GL_ES_LOAD(Enable);
-            IO_GL_ES_LOAD(BlendFunc);
-            IO_GL_ES_LOAD(GetFloatv);
-            IO_GL_ES_LOAD(GetString);
-            IO_GL_ES_LOAD(Viewport);
-            IO_GL_ES_LOAD(DrawArrays);
-            IO_GL_ES_LOAD(DrawElements);
-            IO_GL_ES_LOAD(BindTexture);
-            IO_GL_ES_LOAD(DeleteTextures);
-            IO_GL_ES_LOAD(GenTextures);
-        // -------------------------
-        // GL 1.3
-        // -------------------------
-            IO_GL_ES_LOAD(ActiveTexture);
-        // -------------------------
-        // GL 1.5
-        // -------------------------
-            IO_GL_ES_LOAD(BindBuffer);
-            IO_GL_ES_LOAD(DeleteBuffers);
-            IO_GL_ES_LOAD(GenBuffers);
-            IO_GL_ES_LOAD(BufferData);
-            IO_GL_ES_LOAD(BufferSubData);
-        // -------------------------
-        // GL 2.0
-        // -------------------------
-            IO_GL_ES_LOAD(AttachShader);
-            IO_GL_ES_LOAD(CompileShader);
-            IO_GL_ES_LOAD(CreateProgram);
-            IO_GL_ES_LOAD(CreateShader);
-            IO_GL_ES_LOAD(DeleteProgram);
-            IO_GL_ES_LOAD(DeleteShader);
-            IO_GL_ES_LOAD(EnableVertexAttribArray);
-            IO_GL_ES_LOAD(GetProgramiv);
-            IO_GL_ES_LOAD(GetProgramInfoLog);
-            IO_GL_ES_LOAD(GetShaderiv);
-            IO_GL_ES_LOAD(GetShaderInfoLog);
-            IO_GL_ES_LOAD(GetUniformLocation);
-            IO_GL_ES_LOAD(LinkProgram);
-            IO_GL_ES_LOAD(ShaderSource);
-            IO_GL_ES_LOAD(UseProgram);
-            IO_GL_ES_LOAD(Uniform1i);
-            IO_GL_ES_LOAD(UniformMatrix4fv);
-            IO_GL_ES_LOAD(VertexAttribPointer);
-        }
-        #endif // 20
-        loaded_major = 2;  loaded_minor = 0;
-        
+        // ---- always needed (GL 2.x+) ----
+        IO_GL_LOAD(GetError);
+        IO_GL_LOAD(GetIntegerv);
+        IO_GL_LOAD(GetString);
+        IO_GL_LOAD(Clear);
+        IO_GL_LOAD(ClearColor);
+        IO_GL_LOAD(Viewport);
 
-        // -------------------------
-        // ES 3.0
-        // -------------------------
-        #if IO_GL_API_ES >= 30
-        if (es_major >= 3) {
-            IO_GL_ES_LOAD(BindBufferBase);
-            IO_GL_ES_LOAD(VertexAttribIPointer);
-            IO_GL_ES_LOAD(BindVertexArray);
-            IO_GL_ES_LOAD(DeleteVertexArrays);
-            IO_GL_ES_LOAD(GenVertexArrays);
+        IO_GL_LOAD(Enable);
+        IO_GL_LOAD(Disable);
+        IO_GL_LOAD(BlendFunc);
+        IO_GL_LOAD(CullFace);
+
+        IO_GL_LOAD(GenBuffers);
+        IO_GL_LOAD(BindBuffer);
+        IO_GL_LOAD(BufferData);
+        IO_GL_LOAD(BufferSubData);
+        IO_GL_LOAD(DeleteBuffers);
+
+        IO_GL_LOAD(ActiveTexture);
+        IO_GL_LOAD(GenTextures);
+        IO_GL_LOAD(BindTexture);
+        IO_GL_LOAD(TexParameteri);
+        IO_GL_LOAD(TexParameterf);
+        IO_GL_LOAD(TexImage2D);
+        IO_GL_LOAD(DeleteTextures);
+
+        IO_GL_LOAD(CreateShader);
+        IO_GL_LOAD(ShaderSource);
+        IO_GL_LOAD(CompileShader);
+        IO_GL_LOAD(GetShaderiv);
+        IO_GL_LOAD(GetShaderInfoLog);
+        IO_GL_LOAD(DeleteShader);
+
+        IO_GL_LOAD(CreateProgram);
+        IO_GL_LOAD(AttachShader);
+        IO_GL_LOAD(LinkProgram);
+        IO_GL_LOAD(GetProgramiv);
+        IO_GL_LOAD(GetProgramInfoLog);
+        IO_GL_LOAD(UseProgram);
+        IO_GL_LOAD(DeleteProgram);
+
+        IO_GL_LOAD(GetUniformLocation);
+        IO_GL_LOAD(Uniform1i);
+        IO_GL_LOAD(UniformMatrix4fv);
+
+        IO_GL_LOAD(EnableVertexAttribArray);
+        IO_GL_LOAD(VertexAttribPointer);
+        IO_GL_LOAD(DrawArrays);
+        IO_GL_LOAD(DrawElements);
+
+        // ---- only if core >= 3 ----
+        if (core_major >= 3) {
+            IO_GL_LOAD(GenVertexArrays);
+            IO_GL_LOAD(BindVertexArray);
+            IO_GL_LOAD(DeleteVertexArrays);
+            IO_GL_LOAD(BindBufferBase);
+            IO_GL_LOAD(VertexAttribIPointer);
         }
-        #endif // 30
-        loaded_major = 3;  loaded_minor = 0;
- 
-        #undef IO_GL_ES_LOAD
+
+#undef IO_GL_LOAD
         loaded = true;
-        return {}; // success
-    } // load
+        loaded_major = (io::u8)core_major;
+        loaded_minor = (io::u8)core_minor;
+        return {};
+    } // load_core
 
 // ----------------------------------------------------------------------------
 //                          Higl-level GL API
 // ----------------------------------------------------------------------------
 
 
-#if IO_GL_API_ES >= 20
+#if IO_GL_API_CORE >= 200
     struct Shader {
     private:
         io::u32 _id_program{ 0 };
@@ -666,10 +656,8 @@ namespace gl {
         // Check compile status with `.failed()`
         // When `#define _DEBUG` automatically prints errors via glGetShaderInfoLog
         inline bool Compile(const char* vert, const char* frag) noexcept {
-#if defined(_DEBUG)
             int success;
             char info[512];
-#endif
             using namespace gl;
             io::u32 V; // 1. Vertex shader
             io::u32 F; // 2. Fragment shader
@@ -678,7 +666,6 @@ namespace gl {
             V = CreateShader(ShaderType::VertexShader);
             ShaderSource(V, 1, &vert, nullptr);
             CompileShader(V);
-#if defined(_DEBUG)
             GetShaderiv(V, ShaderProperty::CompileStatus, &success);
             if (!success) {
                 GetShaderInfoLog(V, 512, nullptr, info);
@@ -686,12 +673,10 @@ namespace gl {
                 DeleteShader(V);
                 return false;
             }
-#endif
             // 2. fragment shader
             F = CreateShader(ShaderType::FragmentShader);
             ShaderSource(F, 1, &frag, nullptr);
             CompileShader(F);
-#if defined(_DEBUG)
             GetShaderiv(F, ShaderProperty::CompileStatus, &success);
             if (!success) {
                 GetShaderInfoLog(F, 512, nullptr, info);
@@ -700,13 +685,11 @@ namespace gl {
                 DeleteShader(F);
                 return false;
             }
-#endif  
             // 3. shader program
             P = CreateProgram();
             AttachShader(P, V);
             AttachShader(P, F);
             LinkProgram(P);
-#if defined(_DEBUG)
             GetProgramiv(P, ProgramProperty::LinkStatus, &success);
             if (!success) {
                 GetProgramInfoLog(P, 512, nullptr, info);
@@ -716,7 +699,6 @@ namespace gl {
                 DeleteProgram(P);
                 return false;
             }
-#endif
             // We no longer need shader objects after linking
             DeleteShader(V);
             DeleteShader(F);
@@ -748,41 +730,26 @@ private:
 
 public:
     IO_CONSTEXPR Buffer() noexcept = delete;
-
-    inline explicit Buffer(gl::BufferTarget target) noexcept
-        : _target(target) {
-        gl::GenBuffers(1, &_id);
-    }
-    ~Buffer() noexcept { if (_id) gl::DeleteBuffers(1, &_id); }
-
+    inline explicit Buffer(gl::BufferTarget target) noexcept : _target(target) { gl::GenBuffers(1, &_id); }
+    inline ~Buffer() noexcept { if (_id) gl::DeleteBuffers(1, &_id); }
     inline void bind() const noexcept { BindBuffer(_target, _id); }
-    inline void data(const void* ptr, size_t bytes, gl::BufferUsage usage)
-        const noexcept {
-        BufferData(_target, bytes, ptr, usage);
-    }
+    inline void data(const void* ptr, io::usize bytes, gl::BufferUsage usage) const noexcept { BufferData(_target, bytes, ptr, usage); }
     inline unsigned id() const noexcept { return _id; }
 
     Buffer(const Buffer&) = delete;
     Buffer& operator=(const Buffer&) = delete;
-
-    Buffer(Buffer&& o) noexcept {
-        _id = o._id;
-        _target = o._target;
-        o._id = 0;
-    }
+    Buffer(Buffer&& o) noexcept { _id=o._id; _target=o._target; o._id=0; }
     Buffer& operator=(Buffer&& o) noexcept {
         if (this != &o) {
             if (_id) gl::DeleteBuffers(1, &_id);
-            _id = o._id;
-            _target = o._target;
-            o._id = 0;
+            _id=o._id; _target=o._target; o._id=0;
         }
         return *this;
     }
 };
-#endif // ES 2.0
+#endif // Core 2.0.0
 
-#if IO_GL_API_ES >= 30
+#if IO_GL_API_CORE >= 300
 struct VertexArray {
 private:
     unsigned _id{ 0 };
@@ -852,7 +819,7 @@ struct MeshBinder {
         const io::view<const Attr>& attrs
     ) noexcept {
         io::u32 index, stride;
-        size_t offset = 0;
+        io::usize offset = 0;
         index = stride = 0;
 
         vao.bind();
@@ -880,7 +847,7 @@ struct MeshBinder {
         BindBuffer(BufferTarget::ArrayBuffer, 0);
     }
 }; // struct MeshBinder
-#endif // ES 3.0
+#endif // Core 3.0.0
 
 
 

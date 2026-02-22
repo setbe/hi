@@ -1,14 +1,9 @@
-
-
-
 cmake_minimum_required(VERSION 3.22)
-
 # ---------------------------------------------------------------------------
 # Custom configs for Visual Studio (must be BEFORE project())
 # NOTE: Don't use if(MSVC) here, MSVC is not known yet.
 # ---------------------------------------------------------------------------
 set(HI_CUSTOM_CONFIGS "ReleaseMini;ReleaseNoConsole;ReleaseMiniNoConsole")
-
 if(CMAKE_GENERATOR MATCHES "Visual Studio" OR CMAKE_GENERATOR MATCHES "Ninja Multi-Config")
     set(CMAKE_CONFIGURATION_TYPES
         "Debug;Release;${HI_CUSTOM_CONFIGS}"
@@ -17,7 +12,6 @@ if(CMAKE_GENERATOR MATCHES "Visual Studio" OR CMAKE_GENERATOR MATCHES "Ninja Mul
 endif()
 
 project(higui LANGUAGES CXX)
-
 # ---------------------------------------------------------------------------
 # Seed missing per-config flag variables (must be AFTER project())
 # to avoid: CMAKE_EXE_LINKER_FLAGS_<CFG> not set
@@ -40,17 +34,10 @@ if(CMAKE_GENERATOR MATCHES "Visual Studio")
         endforeach()
     endforeach()
 endif()
-
-
-# -----------------------------------------------------------------------------
 # Options
-# -----------------------------------------------------------------------------
 option(LEGACY_CPP14 "Use legacy C++14 compiler (default ON)" ON)
 option(BUILD_SHARED_LIBS "Build shared libs" OFF)
-
-# -----------------------------------------------------------------------------
 # Language standard
-# -----------------------------------------------------------------------------
 if(LEGACY_CPP14)
     set(CMAKE_CXX_STANDARD 14)
 else()
@@ -58,26 +45,18 @@ else()
 endif()
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-
-# -----------------------------------------------------------------------------
 # Config groups
-# -----------------------------------------------------------------------------
 set(FREESTANDING_CONFIGS ReleaseMini ReleaseNoConsole ReleaseMiniNoConsole)
-
 # Helper generator expression: true when freestanding config
 set(_GE_FREESTANDING
     $<OR:$<CONFIG:ReleaseMini>,$<CONFIG:ReleaseNoConsole>,$<CONFIG:ReleaseMiniNoConsole>>
 )
-
-# -----------------------------------------------------------------------------
 # Flags (cleanly separated: common vs freestanding-only)
-# -----------------------------------------------------------------------------
 set(msvc_common_compile
     "/permissive-"
     "/diagnostics:column"
     "/nologo"
 )
-
 # Freestanding base (applies to all Release* freestanding configs)
 set(msvc_freestanding_base
     "/TP"
@@ -101,7 +80,6 @@ set(msvc_freestanding_base
     "/D;NDEBUG"
     "/D_HAS_EXCEPTIONS=0"
 )
-
 # Freestanding "full" (ReleaseNoConsole)
 set(msvc_freestanding_full_opt
     "/O2"
@@ -110,7 +88,6 @@ set(msvc_freestanding_full_opt
     "/Ot"
     "/Oy"
 )
-
 # Freestanding "mini" (ReleaseMini, ReleaseMiniNoConsole)
 set(msvc_freestanding_mini_opt
     "/O1"
@@ -119,7 +96,6 @@ set(msvc_freestanding_mini_opt
     "/Os"
     "/Oy"
 )
-
 # Debug
 set(msvc_debug_compile
     "/Zi"
@@ -127,12 +103,10 @@ set(msvc_debug_compile
     "/GR"
     "/Od"
 )
-
 # GCC/Clang
 set(unix_common_compile
     "-pipe"
 )
-
 set(unix_freestanding_base
     "-ffunction-sections"
     "-fdata-sections"
@@ -142,13 +116,11 @@ set(unix_freestanding_base
     "-fno-signaling-nans"
     "-fomit-frame-pointer"
 )
-
 set(unix_freestanding_full_opt
     "-O3"
     "-flto"
     "-ffast-math"
 )
-
 set(unix_freestanding_mini_opt
     "-Os"
     "-ffunction-sections"
@@ -161,11 +133,17 @@ set(unix_freestanding_mini_opt
     "-fvisibility=hidden"
     "-fvisibility-inlines-hidden"
 )
-
 set(unix_debug_compile
     "-O0"
     "-g"
     "-fno-omit-frame-pointer"
+)
+set(unix_hosted_link_opt
+    "-Wl,--gc-sections"
+    "-Wl,--hash-style=gnu"
+    "-Wl,--build-id=none"   # optional
+    "-Wl,-z,relro"          # optional security
+    "-Wl,-z,now"            # optional security (slower startup)
 )
 
 # -----------------------------------------------------------------------------
@@ -238,7 +216,9 @@ function(hi_apply_freestanding target)
     )
 
     # GCC/Clang no-std
-    if(UNIX AND NOT APPLE)
+    get_property(_hosted TARGET ${target} PROPERTY HI_HOSTED_LINK)
+    # linux: not hosted link
+    if(UNIX AND NOT APPLE AND NOT _hosted)
       target_link_options(${target} PRIVATE
         $<$<AND:${_GE_FREESTANDING},$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>>>:
           -s -nostdlib -nostartfiles -nodefaultlibs -fno-stack-protector -fno-unwind-tables -fno-asynchronous-unwind-tables
@@ -247,9 +227,14 @@ function(hi_apply_freestanding target)
           -Wl,--gc-sections
           -Wl,-e,_start
           -Wl,-z,norelro
-          -Wl,-z,now
         >
       )
+    endif()
+    # linux: hosted link
+    if(UNIX AND NOT APPLE AND _hosted)
+        target_link_options(${target} PRIVATE
+            $<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>>:${unix_hosted_link_opts}>
+        )
     endif()
 endfunction()
 
@@ -304,6 +289,42 @@ function(hi_add_test_exe name)
     hi_apply_debug(${name})
 endfunction()
 
+function(hi_add_gui_exe name)
+    # usage: hi_add_gui_exe(target cpp_file [headers...] [libs...])
+    set(options)
+    set(oneValueArgs CPP)
+    set(multiValueArgs HEADERS LIBS)
+    cmake_parse_arguments(T "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+    add_executable(${name} ${T_CPP} ${T_HEADERS})
+    set_property(TARGET ${name} PROPERTY HI_HOSTED_LINK 1)
+    target_compile_definitions(${name} PRIVATE
+        HI_GUI_APP=1
+    )
+    if(T_LIBS)
+        target_link_libraries(${name} PRIVATE ${T_LIBS})
+    endif()
+    hi_apply_common(${name})
+    hi_apply_freestanding(${name})
+    hi_apply_debug(${name})
+    # --- Windows: GUI subsystem for "no console" configs ---
+    if(MSVC)
+        target_link_options(${name} PRIVATE
+            $<$<CONFIG:ReleaseNoConsole>:/SUBSYSTEM:WINDOWS>
+            $<$<CONFIG:ReleaseNoConsole>:/ENTRY:WinMain>
+            $<$<CONFIG:ReleaseMiniNoConsole>:/SUBSYSTEM:WINDOWS>
+            $<$<CONFIG:ReleaseMiniNoConsole>:/ENTRY:WinMain>
+        )
+    endif()
+    # --- Linux: link X11 + GL only when needed (typical for your GUI targets) ---
+    if(UNIX AND NOT APPLE)
+        # NOTE: for true -nostdlib freestanding you must provide these as explicit libs,
+        # and ensure you have syscalls/loader logic. Adjust if you keep freestanding.
+        target_link_libraries(${name} PRIVATE
+            $<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>>:X11 GL>
+        )
+    endif()
+endfunction()
+
 # -----------------------------------------------------------------------------
 # Sources
 # -----------------------------------------------------------------------------
@@ -349,13 +370,6 @@ hi_add_header_only(crypto ${SOURCES_CRYPTO})
 # Freestanding examples
 # -----------------------------------------------------------------------------
 
-# gl
-hi_add_test_exe(gl
-    CPP "examples/gl.cpp"
-    HEADERS ${SOURCES_HI}
-    LIBS io hi
-)
-
 # client
 hi_add_test_exe(client
     CPP "examples/client.cpp"
@@ -398,6 +412,22 @@ hi_add_test_exe(test_crypto
     CPP "examples/crypto.cpp"
     HEADERS ${TEST_SOURCES_CRYPTO}
     LIBS io crypto
+)
+
+# -----------------------------------------------------------------------------
+# GUI Applications
+# -----------------------------------------------------------------------------
+
+hi_add_gui_exe(gl
+    CPP "examples/gl.cpp"
+    HEADERS ${SOURCES_HI}
+    LIBS io hi
+)
+
+hi_add_gui_exe(test_gl
+    CPP "examples/tests/opengl.cpp"
+    HEADERS ${SOURCES_HI}
+    LIBS io hi
 )
 
 message(STATUS "Configured ${PROJECT_NAME} (C++${CMAKE_CXX_STANDARD})")

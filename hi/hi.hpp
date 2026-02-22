@@ -11,7 +11,15 @@
 #      endif
 #      include <Windows.h>
 #   elif defined(__linux__)
-// x11
+#       include <X11/Xlib.h>
+#       include <X11/Xatom.h>
+#       include <X11/keysym.h>
+#       include <X11/Xutil.h>
+#       include <GL/gl.h>
+#       include <GL/glx.h>
+#       ifdef None
+#           undef None
+#       endif
 #   else
 #       error "OS isn't specified"
 #   endif
@@ -106,9 +114,9 @@ namespace hi {
 #endif
 
     namespace global {
-        extern unsigned char key_array[static_cast<size_t>(Key::__LAST__)];
+        extern unsigned char key_array[static_cast<io::usize>(Key::__LAST__)];
 #ifdef IO_IMPLEMENTATION
-        unsigned char key_array[static_cast<size_t>(Key::__LAST__)]{0};
+        unsigned char key_array[static_cast<io::usize>(Key::__LAST__)]{0};
 #endif
     } // namespace global
 
@@ -129,7 +137,7 @@ namespace hi {
 
         // Static methods
         IO_NODISCARD static bool isPressed(Key k) noexcept { return hi::global::key_array[static_cast<unsigned int>(k)]; }
-        static IO_CONSTEXPR size_t size() noexcept { return static_cast<unsigned char>(Key::__LAST__); }
+        static IO_CONSTEXPR io::usize size() noexcept { return static_cast<unsigned char>(Key::__LAST__); }
     }; // struct Key_t
 
     IO_CONSTEXPR const char* Key_t::map(Key key_to_map) noexcept {
@@ -241,19 +249,24 @@ namespace hi {
         None = 0,
         Unknown,
 
+        Window,
+        WindowDevice,
+
+        // Missing functions
         MissingOpenglFunction,         // e.g. EXT function
         MissingRequiredOpenglFunction, // e.g. ARB function
+        MissingChoosePixelFormatARB,
+        MissingCreateContextAttribsARB,
+
+        CreateContextAttribsARB,
+        CreateModernContext,
+        GetCurrentContext,
 
         // ------ `w_` stands for Windows ------
         w_WindowClass,
-        w_Window,
-        w_WindowDC,
         // Opengl Window
         w_ChoosePixelFormatARB,
         w_SetPixelFormat,
-        w_CreateContextAttribsARB,
-        w_CreateModernContext,
-        w_GetCurrentContext,
         w_GetCurrentDC,
         // Dummy Window
         w_DummyWindowClass,
@@ -262,9 +275,9 @@ namespace hi {
         w_DummyChoosePixelFormat,
         w_DummySetPixelFormat,
         w_DummyCreateContext,
-        // Missing functions
-        w_MissingChoosePixelFormatARB,
-        w_MissingCreateContextAttribsARB,
+
+        // ------ `l_` stands for Linux ------
+        l_Display
     }; // enum class about_error
 
     IO_NODISCARD IO_CONSTEXPR
@@ -275,15 +288,22 @@ namespace hi {
         // General
         case AE::None: return "no error";
 
+        case AE::MissingOpenglFunction:          return "optional OpenGL entry point isn't provided by the driver";
+        case AE::MissingRequiredOpenglFunction:  return "required OpenGL entry point isn't provided by the driver";
+        case AE::MissingChoosePixelFormatARB:    return "missing wglChoosePixelFormatARB";
+        case AE::MissingCreateContextAttribsARB: return "missing wgCreateContextAttribsARB";
+
+        case AE::CreateContextAttribsARB: return "couldn't create context attribs (ARB)";
+        case AE::CreateModernContext: return "couldn't create modern context";
+        case AE::GetCurrentContext: return "couldn't get current context";
+
+        case AE::Window: return "couldn't create window";
+        case AE::WindowDevice: return "couldn't create window device";
+
         // Windows OS
         case AE::w_WindowClass: return "couldn't create window class";
-        case AE::w_Window: return "couldn't create window";
-        case AE::w_WindowDC: return "couldn't create window DC";
         case AE::w_ChoosePixelFormatARB: return "couldn't choose pixel format (ARB)";
         case AE::w_SetPixelFormat: return "couldn't set pixel format";
-        case AE::w_CreateContextAttribsARB: return "couldn't create context attribs (ARB)";
-        case AE::w_CreateModernContext: return "couldn't create modern context";
-        case AE::w_GetCurrentContext: return "couldn't get current context";
         case AE::w_GetCurrentDC: return "couldn't get current DC";
         case AE::w_DummyWindowClass: return "couldn't create dummy window class";
         case AE::w_DummyWindow: return "couldn't create dummy window object";
@@ -291,51 +311,54 @@ namespace hi {
         case AE::w_DummyChoosePixelFormat: return "couldn't choose dummy pixel format";
         case AE::w_DummySetPixelFormat: return "couldn't set dummy pixel format";
         case AE::w_DummyCreateContext: return "couldn't create dummy context";
-        case AE::w_MissingChoosePixelFormatARB: return "missing wglChoosePixelFormatARB";
-        case AE::w_MissingCreateContextAttribsARB: return "missing wgCreateContextAttribsARB";
-        case AE::MissingOpenglFunction:         return "optional OpenGL entry point isn't provided by the driver";
-        case AE::MissingRequiredOpenglFunction: return "required OpenGL entry point isn't provided by the driver";
+        // Linux
+        case AE::l_Display: return "couldn't open XDisplay";
+        
         default: return "unknown error";
         }
     } // what
 #pragma endregion
 
-    namespace native {
+namespace native {
         // -- Forward declarations ---
         struct Opengl;      // Native OpenGL Context
         struct Window;      // Native Window Context
-    } // namespace native
+} // namespace native
 
-    struct IWindow {
-        // --- Derived Events ---
-        virtual void onRender() noexcept = 0;
-        virtual void onError(Error e, AboutError ae) noexcept = 0;
-        virtual void onScroll(float deltaX, float deltaY) noexcept = 0;
-        virtual void onWindowResize(int width, int height) noexcept = 0;
-        virtual void onMouseMove(int x, int y) noexcept = 0;
-        virtual void onKeyDown(Key k) noexcept = 0;
-        virtual void onKeyUp(Key k) noexcept = 0;
-        virtual void onFocusChange(bool gained) noexcept = 0;
+struct IWindow {
+    // --- Derived Events ---
+    virtual void onRender() noexcept = 0;
+    virtual void onError(Error e, AboutError ae) noexcept = 0;
+    virtual void onScroll(float deltaX, float deltaY) noexcept = 0;
+    virtual void onWindowResize(int width, int height) noexcept = 0;
+    virtual void onMouseMove(int x, int y) noexcept = 0;
+    virtual void onKeyDown(Key k) noexcept = 0;
+    virtual void onKeyUp(Key k) noexcept = 0;
+    virtual void onFocusChange(bool gained) noexcept = 0;
+    // --- Defined by library ---
+    virtual void Render() noexcept = 0;
+    virtual void onGeometryChange(int w, int h) noexcept = 0;
+    IO_NODISCARD virtual void setApiAlive(RendererApi api, bool alive) noexcept = 0;
+    IO_NODISCARD virtual RendererApi api() const noexcept = 0;
+    IO_NODISCARD virtual       native::Opengl& opengl()        noexcept = 0;
+    IO_NODISCARD virtual const native::Opengl& opengl()  const noexcept = 0;
+    IO_NODISCARD virtual       native::Window& native()       noexcept = 0;
+    IO_NODISCARD virtual const native::Window& native() const noexcept = 0;
+    IO_NODISCARD virtual int width() const noexcept = 0;
+    IO_NODISCARD virtual int height() const noexcept = 0;
+}; // IWindow
 
-        // --- Defined by library ---
-        virtual void Render() noexcept = 0;
-        virtual void onGeometryChange(int w, int h) noexcept = 0;
-        IO_NODISCARD virtual RendererApi api() const noexcept = 0;
-        IO_NODISCARD virtual       native::Opengl& opengl()        noexcept = 0;
-        IO_NODISCARD virtual const native::Opengl& opengl()  const noexcept = 0;
-        IO_NODISCARD virtual       native::Window& native()       noexcept = 0;
-        IO_NODISCARD virtual const native::Window& native() const noexcept = 0;
-        IO_NODISCARD virtual int width() const noexcept = 0;
-        IO_NODISCARD virtual int height() const noexcept = 0;
-    }; // IWindow
-
-    namespace native {
-        // --------------------------- Native Window --------------------------
-        struct Window {
+namespace native {
+    // --------------------------- Native Window --------------------------
+    struct Window {
         private:
 #ifdef IO_IMPLEMENTATION
 #       ifdef __linux__
-            // linux impl
+            ::Display* _dpy{ nullptr };
+            ::Window   _xwnd{ 0 };
+            ::Atom     _wm_delete{ 0 };
+            ::Colormap _cmap{ 0 };
+            bool       _mapped{ false };
 #       elif defined(_WIN32)
             HDC _hdc{ nullptr };
             HWND _hwnd{ nullptr };
@@ -360,7 +383,8 @@ namespace hi {
         public:
 #ifdef IO_IMPLEMENTATION
 #       if defined(__linux__)
-            // linux impl
+            ::Display* dpy() const noexcept { return _dpy; }
+            ::Window xwnd() const noexcept { return _xwnd; }
 #       elif defined(_WIN32)
             HDC getHdc() const noexcept { return _hdc; }
             void setHdc(HDC new_hdc) noexcept { _hdc = new_hdc; }
@@ -370,8 +394,8 @@ namespace hi {
 #endif // IO_IMPLEMENTATION
         }; // struct Window
 
-
-#ifdef IO_IMPLEMENTATION
+// WinApi Window
+#if defined(IO_IMPLEMENTATION) && defined(_WIN32)
         IO_CONSTEXPR_VAR wchar_t WINDOW_CLASSNAME[]{ L"_" };
         static LRESULT CALLBACK WinProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) noexcept;
 
@@ -421,7 +445,7 @@ namespace hi {
                 /* lpParam      */ static_cast<void*>(&win)));
             HWND wnd = win.native().getHwnd();
             if (!wnd) {
-                win.onError(Error::Window, AboutError::w_Window);
+                win.onError(Error::Window, AboutError::Window);
                 return;
             }
             SetWindowLongW(wnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&win));
@@ -430,7 +454,7 @@ namespace hi {
             HDC new_hdc = GetDC(wnd);
             win.native().setHdc(new_hdc);
             if (!win.native().getHdc()) {
-                win.onError(Error::Window, AboutError::w_WindowDC);
+                win.onError(Error::Window, AboutError::WindowDevice);
                 return;
             }
         } // Window
@@ -632,24 +656,274 @@ namespace hi {
         } // WinProc
 #endif // IO_IMPLEMENTATION
 
-        // -------------------- Native Opengl Context -------------------------
-        struct Opengl {
+// glx + FBConfig + XWindow
+#if defined(IO_IMPLEMENTATION) && defined(__linux__)
+namespace glx {
+    // Basic FB attrs: RGBA, double buffer, depth/stencil.
+    static IO_CONSTEXPR_VAR int fb_attribs[] = {
+        GLX_X_RENDERABLE,   True,
+        GLX_DRAWABLE_TYPE,  GLX_WINDOW_BIT,
+        GLX_RENDER_TYPE,    GLX_RGBA_BIT,
+        GLX_X_VISUAL_TYPE,  GLX_TRUE_COLOR,
+        GLX_DOUBLEBUFFER,   True, // OpenGL needs double buffering
+        GLX_RED_SIZE,       8,
+        GLX_GREEN_SIZE,     8,
+        GLX_BLUE_SIZE,      8,
+        GLX_ALPHA_SIZE,     8,
+        GLX_DEPTH_SIZE,     24,
+        GLX_STENCIL_SIZE,   8,
+        0 };
+
+    struct fb_pick {
+        GLXFBConfig fb{};
+        XVisualInfo* vi{};
+    };
+
+    static inline fb_pick pick_fb(Display* dpy) noexcept {
+        fb_pick out{};
+        int n = 0;
+        GLXFBConfig* fbs = glXChooseFBConfig(dpy, DefaultScreen(dpy), fb_attribs, &n);
+        if (!fbs || n <= 0) return out;
+
+        out.fb = fbs[0];
+        out.vi = glXGetVisualFromFBConfig(dpy, out.fb);
+
+        XFree(fbs);
+        return out;
+    }
+}
+    inline native::Window::Window(IWindow& win, int width, int height, bool shown, bool bordless) noexcept {
+        (void)bordless; // @TODO: borderless via _MOTIF_WM_HINTS
+        _dpy = XOpenDisplay(nullptr);
+        if (!_dpy) { win.onError(Error::Window, AboutError::Window); return; }
+
+        auto pick = glx::pick_fb(_dpy);
+        if (!pick.fb || !pick.vi) { win.onError(Error::Window, AboutError::WindowDevice); return; }
+        _cmap = XCreateColormap(_dpy, RootWindow(_dpy, pick.vi->screen), pick.vi->visual, AllocNone);
+
+        XSetWindowAttributes swa{};
+        swa.colormap = _cmap;
+        swa.event_mask = ExposureMask    | StructureNotifyMask | KeyPressMask      | KeyReleaseMask |
+                         ButtonPressMask | ButtonReleaseMask   | PointerMotionMask | FocusChangeMask;
+        _xwnd = XCreateWindow(_dpy, RootWindow(_dpy, pick.vi->screen),
+            0, 0, (unsigned)width, (unsigned)height,
+            0,
+            pick.vi->depth, InputOutput,
+            pick.vi->visual, CWColormap | CWEventMask,
+            &swa);
+        XFree(pick.vi);
+        if (!_xwnd) { win.onError(Error::Window, AboutError::Window); return; }
+        // WM_DELETE_WINDOW -> allow graceful close
+        _wm_delete = XInternAtom(_dpy, "WM_DELETE_WINDOW", False);
+        XSetWMProtocols(_dpy, _xwnd, &_wm_delete, 1);
+
+        if (shown) {
+            XMapWindow(_dpy, _xwnd);
+            _mapped = true;
+            XFlush(_dpy);
+        }
+    }
+
+    inline native::Window::~Window() noexcept {
+    if (_dpy) {
+        if (_xwnd) XDestroyWindow(_dpy, _xwnd);
+        if (_cmap) XFreeColormap(_dpy, _cmap);
+        XCloseDisplay(_dpy);
+    }
+    _xwnd = 0; _cmap = 0; _wm_delete = 0; _dpy = nullptr; _mapped = false;
+}
+
+    static ::hi::Key map_key_sym(::KeySym ks) noexcept {
+    using K = ::hi::Key;
+    // Minimal mapping; extend as needed.
+    if (ks >= XK_A && ks <= XK_Z) return Key_t{ (int)K::A + (int)(ks - XK_A) }.key();
+    if (ks >= XK_a && ks <= XK_z) return Key_t{ (int)K::A + (int)(ks - XK_a) }.key();
+    if (ks >= XK_0 && ks <= XK_9) return Key_t{ (int)K::_0 + (int)(ks - XK_0) }.key();
+    if (ks >= XK_F1 && ks <= XK_F12) return Key_t{ (int)K::F1 + (int)(ks - XK_F1) }.key();
+
+    switch (ks) {
+        case XK_Shift_L: case XK_Shift_R:   return K::Shift;
+        case XK_Control_L: case XK_Control_R:return K::Control;
+        case XK_Alt_L: case XK_Alt_R:       return K::Alt;
+        case XK_Super_L: case XK_Super_R:   return K::Super;
+
+        case XK_Escape:   return K::Escape;
+        case XK_Return:   return K::Return;
+        case XK_Tab:      return K::Tab;
+        case XK_BackSpace:return K::Backspace;
+        case XK_Insert:   return K::Insert;
+        case XK_Delete:   return K::Delete;
+
+        case XK_Home:     return K::Home;
+        case XK_End:      return K::End;
+        case XK_Page_Up:  return K::PageUp;
+        case XK_Page_Down:return K::PageDown;
+
+        case XK_Left:     return K::Left;
+        case XK_Right:    return K::Right;
+        case XK_Up:       return K::Up;
+        case XK_Down:     return K::Down;
+
+        case XK_space:    return K::Space;
+        case XK_minus:    return K::Hyphen;
+        case XK_equal:    return K::Equal;
+        case XK_bracketleft:  return K::BracketLeft;
+        case XK_bracketright: return K::BracketRight;
+        case XK_backslash:    return K::Backslash;
+        case XK_semicolon:    return K::Semicolon;
+        case XK_apostrophe:   return K::Apostrophe;
+        case XK_comma:        return K::Comma;
+        case XK_period:       return K::Period;
+        case XK_slash:        return K::Slash;
+        case XK_grave:        return K::Grave;
+
+        default: return K::__NONE__;
+    }
+}
+
+    inline bool native::Window::PollEvents(IWindow& win) const noexcept {
+        if (!_dpy) return false;
+
+        IO_CONSTEXPR_VAR int MAX_EVENTS_PER_POLL = 256; // bounded work
+        int processed = 0;
+
+        bool have_resize = false;
+        int last_w, last_h;
+        last_w=last_h=0;
+
+        while (XPending(_dpy) > 0 && processed < MAX_EVENTS_PER_POLL) {
+            ::XEvent e{};
+            XNextEvent(_dpy, &e);
+            ++processed;
+
+            if (e.type == ClientMessage) {
+                if ((::Atom)e.xclient.data.l[0] == _wm_delete) return false;
+            }
+
+            switch (e.type) {
+                case Expose: break; // don't render here
+                case ConfigureNotify: {
+                    // coalesce: keep only the last size seen in this poll
+                    last_w = e.xconfigure.width;
+                    last_h = e.xconfigure.height;
+                    have_resize = true;
+
+                    // optional: drain consecutive ConfigureNotify to skip storms
+                    while (XPending(_dpy) > 0) {
+                        ::XEvent e2{};
+                        XPeekEvent(_dpy, &e2);
+                        if (e2.type != ConfigureNotify) break;
+                        XNextEvent(_dpy, &e2);
+                        ++processed;
+                        last_w = e2.xconfigure.width;
+                        last_h = e2.xconfigure.height;
+                        if (processed >= MAX_EVENTS_PER_POLL) break;
+                    }
+                    break;
+                }
+
+                case MotionNotify:
+                    // optional coalesce motion too
+                    win.onMouseMove(e.xmotion.x, e.xmotion.y);
+                    break;
+
+                case FocusIn:  win.onFocusChange(true);  break;
+                case FocusOut: win.onFocusChange(false); break;
+
+                case ButtonPress:
+                    if      (e.xbutton.button == Button4) win.onScroll(+1.f, 0.f);
+                    else if (e.xbutton.button == Button5) win.onScroll(-1.f, 0.f);
+                    break;
+
+                case KeyPress:
+                case KeyRelease: {
+                    const bool pressed = (e.type == KeyPress);
+                    ::KeySym ks = XLookupKeysym(&e.xkey, 0);
+                    ::hi::Key k = map_key_sym(ks);
+                    ::hi::global::key_array[(int)k] = pressed ? 1 : 0;
+                    if (pressed) win.onKeyDown(k);
+                    else         win.onKeyUp(k);
+                    break;
+                }
+            }
+        }
+
+        if (have_resize) {
+            win.onGeometryChange(last_w, last_h);
+        }
+
+        return true;
+    }
+
+    inline void native::Window::setTitle(const io::char_view title) const noexcept {
+        if (!_dpy || !_xwnd || !title) return;
+        if (!_dpy || !_xwnd || !title) return;
+        const Atom utf8      = XInternAtom(_dpy, "UTF8_STRING", False);
+        const Atom net_wm    = XInternAtom(_dpy, "_NET_WM_NAME", False);
+        const Atom wm_name   = XInternAtom(_dpy, "WM_NAME", False);
+        // Primary: EWMH UTF-8 title
+        XChangeProperty(_dpy, _xwnd, net_wm, utf8, 8, PropModeReplace,
+                        reinterpret_cast<const unsigned char*>(title.data()),
+                        (int)title.size());
+        // Fallback: old WM_NAME (use same bytes; many WMs still read _NET_WM_NAME)
+        XChangeProperty(_dpy, _xwnd, wm_name, utf8, 8, PropModeReplace,
+                        reinterpret_cast<const unsigned char*>(title.data()),
+                        (int)title.size());
+        XFlush(_dpy);
+    }
+
+    inline void native::Window::setShow(bool v) const noexcept {
+    if (!_dpy || !_xwnd) return;
+    if (v) XMapWindow(_dpy, _xwnd);
+    else   XUnmapWindow(_dpy, _xwnd);
+    XFlush(_dpy);
+}
+
+    inline void native::Window::setCursorVisible(bool v) const noexcept {
+    if (!_dpy || !_xwnd) return;
+    if (v) {
+        XUndefineCursor(_dpy, _xwnd);
+        XFlush(_dpy);
+        return;
+    }
+    // Create invisible cursor
+    static ::Cursor invisible{};
+    if (!invisible) {
+        ::Pixmap bm = XCreatePixmap(_dpy, _xwnd, 1, 1, 1);
+        XColor black{}; // zeros
+        static char data[1] = { 0 };
+        ::Pixmap mask = XCreateBitmapFromData(_dpy, _xwnd, data, 1, 1);
+        invisible = XCreatePixmapCursor(_dpy, bm, mask, &black, &black, 0, 0);
+        XFreePixmap(_dpy, bm);
+        XFreePixmap(_dpy, mask);
+    }
+    XDefineCursor(_dpy, _xwnd, invisible);
+    XFlush(_dpy);
+}
+
+    inline void native::Window::setFullscreen(bool) const noexcept {
+    // _NET_WM_STATE_FULLSCREEN via XSendEvent + atoms.
+}
+#endif
+    // -------------------- Native Opengl Context -------------------------
+    struct Opengl {
         private:
 #ifdef IO_IMPLEMENTATION
 #   if defined(__linux__)
-            // linux impl
+            ::GLXContext _ctx{ nullptr };
 #   elif defined(_WIN32)
             HGLRC _hglrc{ nullptr };
 #   endif
 #endif // IO_IMPLEMENTATION
-
-            io::u8 _major;
-            io::u8 _minor;
+        ::hi::IWindow* _win{};
+        io::u8 _req_core_major{3};
+        io::u8 _req_core_minor{3};
 
         public:
-            Opengl() noexcept = delete;
-            explicit inline Opengl(io::u8 major, io::u8 minor) noexcept
-                : _major{ major }, _minor{ minor } {};
+            Opengl() noexcept = default;
+            explicit Opengl(io::u8 core_major, io::u8 core_minor) noexcept
+                : _req_core_major(core_major), _req_core_minor(core_minor) {}
+
             ~Opengl() noexcept;
             // Non-copyable, non-movable
             Opengl(const Opengl&) = delete;
@@ -662,12 +936,16 @@ namespace hi {
             inline void SwapBuffers(const IWindow&) const noexcept;
             IO_NODISCARD AboutError CreateContext(IWindow&) noexcept;
 
-            IO_NODISCARD inline io::u8 currentMajorVersion() const noexcept { return _major; }
-            IO_NODISCARD inline io::u8 currentMinorVersion() const noexcept { return _minor; }
+            IO_NODISCARD io::u8 reqCoreMajor() const noexcept { return _req_core_major; }
+            IO_NODISCARD io::u8 reqCoreMinor() const noexcept { return _req_core_minor; }
+
+            // required load of `gl::GetIntegerv` first
+            IO_NODISCARD inline io::u8 currentMajorVersion() const noexcept { int v; gl::GetIntegerv(gl::gl_version.major, &v); return (io::u8)v; }
+            IO_NODISCARD inline io::u8 currentMinorVersion() const noexcept { int v; gl::GetIntegerv(gl::gl_version.minor, &v); return (io::u8)v; }
 
 #ifdef IO_IMPLEMENTATION
 #   if defined(__linux__)
-
+            GLXContext getCtx() const noexcept { return _ctx; }
 #   elif defined(_WIN32)
             HGLRC getHglrc() const noexcept { return _hglrc; }
             void setHglrc(HGLRC new_hglrc) noexcept { _hglrc = new_hglrc; }
@@ -675,7 +953,7 @@ namespace hi {
 #endif // IO_IMPLEMENTATION
         }; // struct OpenglContext
 
-#ifdef IO_IMPLEMENTATION
+#if defined(IO_IMPLEMENTATION) && defined(_WIN32)
         inline void Opengl::Render(IWindow& win) const noexcept {
             PAINTSTRUCT ps;
             HWND wnd = win.native().getHwnd();
@@ -859,8 +1137,8 @@ namespace hi {
                 choose = (wgl::PFNWGLCHOOSEPIXELFORMATARBPROC)wglGetProcAddress("wglChoosePixelFormatARB");
                 create = (wgl::PFNWGLCREATECONTEXTATTRIBSARBPROC)wglGetProcAddress("wglCreateContextAttribsARB");
 
-                if (!choose) return AboutError::w_MissingChoosePixelFormatARB;
-                if (!create) return AboutError::w_MissingCreateContextAttribsARB;
+                if (!choose) return AboutError::MissingChoosePixelFormatARB;
+                if (!create) return AboutError::MissingCreateContextAttribsARB;
 
                 return AboutError::None;
             } // LoadExtensions
@@ -895,18 +1173,43 @@ namespace hi {
                 if (!SetPixelFormat(main_dc, format, &pfd)) return AboutError::w_SetPixelFormat;
 
                 ctx = create(main_dc, nullptr, wgl::CONTEXT_ATTRS);
-                if (!ctx) return AboutError::w_CreateContextAttribsARB;
-                if (!wglMakeCurrent(main_dc, ctx)) return AboutError::w_CreateModernContext;
+                if (!ctx) return AboutError::CreateContextAttribsARB;
+                if (!wglMakeCurrent(main_dc, ctx)) return AboutError::CreateModernContext;
 
-                if (!wglGetCurrentContext()) return AboutError::w_GetCurrentContext;
+                if (!wglGetCurrentContext()) return AboutError::GetCurrentContext;
                 if (!wglGetCurrentDC())      return AboutError::w_GetCurrentDC;
 
                 win.opengl().setHglrc(ctx);
                 const io::u8 major = win.opengl().currentMajorVersion();
                 const io::u8 minor = win.opengl().currentMinorVersion();
                 gl::loader = OpenglLoader;
-                if (!::gl::load(major, minor).empty()) return AboutError::MissingRequiredOpenglFunction;
-                // here we can also load EXT functions
+                // 1) minimal load for querying version
+                // NOTE: GetIntegerv itself must be loadable; easiest: call load_core(2,0) first,
+                // but load_core currently requires GetIntegerv -> circular.
+                // So: load GetIntegerv+GetError+GetString manually, then query, then load full.
+                {
+                    auto must = [](auto& out, const char* name) noexcept -> bool {
+                        using FnT = decltype(out);
+                        void* p = ::gl::loader(name);
+                        out = reinterpret_cast<FnT>(p);
+                        return out != nullptr;
+                    };
+                    if (!must(gl::native::pGetError, "glGetError")) return AboutError::MissingRequiredOpenglFunction;
+                    if (!must(gl::native::pGetString, "glGetString")) return AboutError::MissingRequiredOpenglFunction;
+                    if (!must(gl::native::pGetIntegerv, "glGetIntegerv")) return AboutError::MissingRequiredOpenglFunction;
+                    gl::loaded = true; // allow calling wrappers
+                }
+            
+                int real_maj=0, real_min=0;
+                gl::query_core_version(real_maj, real_min);
+                if (real_maj <= 0) return AboutError::MissingRequiredOpenglFunction;
+            
+                // 2) now load full table based on real core version
+                gl::loaded = false;
+                auto miss = gl::load_core(real_maj, real_min);
+                if (!miss.empty()) return AboutError::MissingRequiredOpenglFunction;
+
+                _win->setApiAlive(RendererApi::Opengl, true);
 
                 return AboutError::None;
             } // CreateModernContext
@@ -933,7 +1236,119 @@ namespace hi {
         }
     
 #endif // IO_IMPLEMENTATION
-    } // namespace native
+#if defined(IO_IMPLEMENTATION) && defined(__linux__)
+static inline void* glx_loader(const char* name) noexcept {
+    return (void*)glXGetProcAddressARB((const GLubyte*)name);
+}
+
+namespace glx {
+    typedef GLXContext (*PFN_glXCreateContextAttribsARB)(
+        Display*, GLXFBConfig, GLXContext, Bool, const int*);
+
+    static inline PFN_glXCreateContextAttribsARB get_create_attribs() noexcept {
+        return (PFN_glXCreateContextAttribsARB)glXGetProcAddressARB((const GLubyte*)"glXCreateContextAttribsARB");
+    }
+    static inline bool gl_bootstrap_load() noexcept {
+        auto must = [](auto& out, const char* name) noexcept -> bool {
+            using FnT = decltype(out);
+            void* p = ::gl::loader(name);
+            out = reinterpret_cast<FnT>(p);
+            return out != nullptr;
+        };
+        return must(gl::native::pGetError,   "glGetError") &&
+               must(gl::native::pGetString,  "glGetString") &&
+               must(gl::native::pGetIntegerv,"glGetIntegerv");
+    }
+} // namespace glx
+
+    IO_NODISCARD AboutError native::Opengl::CreateContext(IWindow& win) noexcept {
+        _win = &win;
+        auto* dpy = _win->native().dpy();
+        if (!dpy) return AboutError::l_Display;
+
+        auto pick = glx::pick_fb(dpy); 
+        if (!pick.fb) return AboutError::WindowDevice;
+
+        glx::PFN_glXCreateContextAttribsARB create_attribs = glx::get_create_attribs();
+        if (!create_attribs) return AboutError::MissingCreateContextAttribsARB;
+
+        // Prefer 3.3, then 3.1, then 3.0, then 2.1 (compat not requested here)
+        struct { int maj, min; } tries[] = { {4,1},{4,0},{3,3},{3,2},{3,1},{3,0} };
+
+        for (auto t : tries) {
+            const int attribs[] = {
+                GLX_CONTEXT_MAJOR_VERSION_ARB, t.maj,
+                GLX_CONTEXT_MINOR_VERSION_ARB, t.min,
+                GLX_CONTEXT_PROFILE_MASK_ARB,  GLX_CONTEXT_CORE_PROFILE_BIT_ARB,
+                0
+            };
+
+            ::GLXContext ctx = create_attribs(dpy, pick.fb, nullptr, True, attribs);
+            if (!ctx) continue;
+
+            if (!glXMakeCurrent(dpy, win.native().xwnd(), ctx)) {
+                glXDestroyContext(dpy, ctx);
+                continue;
+            }
+
+            gl::loader = glx_loader;
+
+            // bootstrap for version query
+            gl::loaded = true;
+            if (!glx::gl_bootstrap_load()) {
+                glXDestroyContext(dpy, ctx);
+                continue;
+            }
+
+            int real_maj = 0, real_min = 0;
+            gl::GetIntegerv(0x821B /*GL_MAJOR_VERSION*/, &real_maj);
+            gl::GetIntegerv(0x821C /*GL_MINOR_VERSION*/, &real_min);
+
+            // accept only if real >= req
+            if (!gl::ver_ge(real_maj, real_min, t.maj, t.min)) {
+                glXDestroyContext(dpy, ctx);
+                continue;
+            }
+
+            // now do full load based on *real* version
+            gl::loaded = false;
+            auto miss = gl::load_core(real_maj, real_min);
+            if (!miss.empty()) {
+                glXDestroyContext(dpy, ctx);
+                continue;
+            }
+
+            _ctx = ctx;
+            _win->setApiAlive(RendererApi::Opengl, true);
+            return AboutError::None;
+        }
+
+        return AboutError::CreateContextAttribsARB;
+    }
+
+    native::Opengl::~Opengl() noexcept {
+        _win->setApiAlive(RendererApi::None, false);
+        glXDestroyContext(_win->native().dpy(), _ctx);
+    }
+
+    inline void native::Opengl::Render(IWindow& win) const noexcept {
+        auto* dpy = win.native().dpy();
+        if (!dpy || !_ctx) return;
+
+        // Ensure current
+        if (glXGetCurrentContext() != _ctx) {
+            glXMakeCurrent(dpy, win.native().xwnd(), _ctx);
+        }
+        win.onRender();
+    }
+
+    inline void native::Opengl::SwapBuffers(const IWindow& win) const noexcept {
+        auto* dpy = win.native().dpy();
+        if (!dpy || !_ctx) return;
+        glXSwapBuffers(dpy, win.native().xwnd());
+    }
+#endif
+} // namespace native
 
     // --- CRTP base ---
     template <typename Derived>
@@ -973,6 +1388,7 @@ namespace hi {
         inline void onGeometryChange(int w, int h) noexcept override;
 
     public:
+        IO_NODISCARD inline void setApiAlive(RendererApi api, bool alive) noexcept override { _renderer_api = api; _renderer_alive = alive; };
         IO_NODISCARD inline bool PollEvents() const noexcept {
             // const Window<Derived>* -> IWindow&
             auto* self_nc = const_cast<Window<Derived>*>(this);
@@ -985,7 +1401,9 @@ namespace hi {
 #   ifdef _WIN32
                PostMessageW(reinterpret_cast<HWND>(native().getHwnd()), WM_QUIT, 0, 0);
 #   else
-#      error "Not implemented"
+#               // simplest: close via XDestroyWindow ->
+                //   PollEvents returns false once ClientMessage/DestroyNotify
+                // or just set a flag in your app loop.
 #   endif
 #endif // IO_IMPLEMENTATION
         }
@@ -995,9 +1413,10 @@ namespace hi {
         inline void setTitle(const io::char_view new_title) const noexcept { native().setTitle(new_title); }
         inline void setFullscreen(bool value) const noexcept { native().setFullscreen(value); }
         inline void setCursorVisible(bool value) const noexcept { native().setCursorVisible(value); }
-        void setApi(RendererApi api, io::u8 major, io::u8 minor) noexcept;
+        void setGlCore(io::u8 major, io::u8 minor) noexcept;
 
     private:
+        
         native::Window _native_window;
         int _width;
         int _height;
@@ -1027,16 +1446,13 @@ namespace hi {
 #ifdef IO_IMPLEMENTATION
     template <typename Derived>
     inline void Window<Derived>::onGeometryChange(int w, int h) noexcept {
-        HDC hdc = reinterpret_cast<HDC>(native().getHdc());
-        // Update window size
-        _width = w;
-        _height = h;
-
-        // Switch between APIs
-        switch (api()) {
-        case RendererApi::Opengl: // Call viewport    
+        _width=w; _height=h; // Update window size
+        switch (api()) { // Switch between APIs
+        case RendererApi::Opengl:
+#ifdef _WIN32
             io::sleep_ms(7); // Hack: slow down the program.
-            gl::Viewport(0, 0, w, h);
+#endif
+            gl::Viewport(0, 0, w, h); // Call viewport 
             break;
         default:
             break;
@@ -1068,44 +1484,23 @@ namespace hi {
     } // render
 
     template <typename Derived>
-    void Window<Derived>::setApi(RendererApi api, io::u8 major, io::u8 minor) noexcept {
-        if (api == _renderer_api) return;
-
+    void Window<Derived>::setGlCore(io::u8 major, io::u8 minor) noexcept {
+        if (_renderer_api == RendererApi::Opengl) return;
         if (_renderer_alive) { // Destroy old renderer
             switch (_renderer_api) {
-            case RendererApi::Opengl: {
-                g.~Opengl();
-                break;
-            }
+            case RendererApi::Opengl: g.~Opengl(); break;
             case RendererApi::Vulkan: break; // @TODO
             }
-            _renderer_alive = false;
         }
-
-        _renderer_api = api;
-        HDC hdc = reinterpret_cast<HDC>(native().getHdc());
-
-        switch (_renderer_api) {
-        case RendererApi::Opengl: {
-            new (&g) native::Opengl(major, minor);
-            _renderer_alive = true;
-
-            Error err = Error::Opengl;
-            AboutError about = g.CreateContext(*this);
-            if (about != AboutError::None) {
-                onError(Error::Opengl, about);
-                g.~Opengl();
-                _renderer_alive = false;
-                _renderer_api = RendererApi::None;
-                return;
-            }
-            gl::Viewport(0, 0, _width, _height);
-            break;
+        new (&g) native::Opengl(major, minor);
+        Error err = Error::Opengl;
+        AboutError about = g.CreateContext(*this);
+        if (about != AboutError::None) {
+            onError(Error::Opengl, about);
+            g.~Opengl();
+            return;
         }
-        case RendererApi::Vulkan: break; // @TODO
-        default:
-            break;
-        } // switch
+        gl::Viewport(0, 0, _width, _height);
     } // set_api
 #endif // IO_IMPLEMENTATION
 } // namespace hi

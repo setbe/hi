@@ -8,6 +8,11 @@
 #   define _DEBUG
 #endif
 
+// Macro may come from XLib
+#ifdef None
+#   undef None
+#endif
+
 // ------------------------------ IO_API --------------------------------------
 #ifndef IO_API
 #  if defined(_WIN32) && defined(IO_BUILD_DLL)
@@ -3682,6 +3687,7 @@ namespace io {
     struct nothrow_t { explicit constexpr nothrow_t(int) {} };
     constexpr nothrow_t nothrow{0};
 } // namespace io
+#if !defined(HI_GUI_APP)
 extern "C" {
     int main(); // Declare user's main (in same TU will exist)
     __attribute__((noreturn, used, visibility("default")))
@@ -3691,6 +3697,7 @@ extern "C" {
         io::exit_process(rc);
     }
 }
+#endif // !HI_GUI_APP
 #endif // !IO_HAS_STD && __linux__
 
 // ------------------------- new -------------------------
