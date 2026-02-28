@@ -69,9 +69,19 @@ static inline _RetType _Name _Args_Decl noexcept {                            \
 } /* glFunc */                                                                \
 } // namespace gl
 
+#define GL_CALL_OVERLOAD(_Name, _RetType, _ProcT, _Args_Decl, _Args_Pass)     \
+namespace gl {                                                                \
+static inline _RetType _Name _Args_Decl noexcept {                            \
+    assert(::gl::loaded && "gl::" #_Name " called before gl::load()");        \
+    assert(::gl::native::p##_Name && "gl::" #_Name " missing");               \
+    return ::gl::native::p##_Name _Args_Pass;                                 \
+} /* glFunc */                                                                \
+} // namespace gl
+
 // ========================== opengl enums ====================================
 
 namespace gl {
+    IO_CONSTEXPR_VAR static int UNPACK_ALIGNMENT = 0x0CF5;
     // These values correspond to the standard OpenGL flags for glClear().  
     // They can be combined using the `|` operator, for example:
     //     gl::Clear(gl::buffer_bit.Color | gl::buffer_bit.Depth);
@@ -86,10 +96,10 @@ namespace gl {
         IO_CONSTEXPR_VAR static int Color   = 0x00004000;
     } buffer_bit;
 
-    IO_CONSTEXPR_VAR struct GlVersion {
+    struct GlVersionParam {
         IO_CONSTEXPR_VAR static int major = 0x821B;
         IO_CONSTEXPR_VAR static int minor = 0x821C;
-    } gl_version;
+    };
 
     enum class Face : io::u32 {
         Front = 0x404,
@@ -118,47 +128,39 @@ namespace gl {
         // others
     };
 
-    enum class TextureTarget : io::u32 {
-        Texture2D = 0xDE1,
-        // others
+    // -------------------------------------------------------------------------
+    // TexTarget: what kind of texture object is being specified/bound.
+    // This is not "format"; it selects the texture *type* and (for cubemaps) the face.
+    // -------------------------------------------------------------------------
+    enum class TexTarget : io::u32 {
+        // Regular 2D texture: width × height, UV coordinates normalized [0..1].
+        // Supports mipmaps (levels 0..N).
+        Tex2D = 0x0DE1,
+
+        // 1D array texture: (width × layers). In glTexImage2D call, "height" parameter is the layer count.
+        // In shaders: sampler1DArray / isampler1DArray / usampler1DArray, sampled with (u, layer).
+        Array1D = 0x8C18,
+
+        // Rectangle texture: (width × height) but texture coordinates are *unnormalized* (pixel-space).
+        // Mipmaps are not allowed, so `level` must be 0. Rare in modern renderers; historically used for some FBO/video paths.
+        TexRectangle = 0x84F5,
+
+        // Cubemap faces. A cubemap is conceptually one texture with 6 square faces.
+        // When using glTexImage2D, you specify each face with one of these targets.
+        // Sampling is via samplerCube with a direction vector (vec3).
+        CubeMapPositiveX = 0x8515,
+        CubeMapNegativeX = 0x8516,
+        CubeMapPositiveY = 0x8517,
+        CubeMapNegativeY = 0x8518,
+        CubeMapPositiveZ = 0x8519,
+        CubeMapNegativeZ = 0x851A,
     };
 
-    IO_CONSTEXPR_VAR struct TextureUnit {
-        IO_CONSTEXPR_VAR static io::u32  _0 = 0x84C0;
-        IO_CONSTEXPR_VAR static io::u32  _1 = _0+1;
-        IO_CONSTEXPR_VAR static io::u32  _2 = _0+2;
-        IO_CONSTEXPR_VAR static io::u32  _3 = _0+3;
-        IO_CONSTEXPR_VAR static io::u32  _4 = _0+4;
-        IO_CONSTEXPR_VAR static io::u32  _5 = _0+5;
-        IO_CONSTEXPR_VAR static io::u32  _6 = _0+6;
-        IO_CONSTEXPR_VAR static io::u32  _7 = _0+7;
-        IO_CONSTEXPR_VAR static io::u32  _8 = _0+8;
-        IO_CONSTEXPR_VAR static io::u32  _9 = _0+9;
-        IO_CONSTEXPR_VAR static io::u32 _10 = _0+10;
-        IO_CONSTEXPR_VAR static io::u32 _11 = _0+11;
-        IO_CONSTEXPR_VAR static io::u32 _12 = _0+12;
-        IO_CONSTEXPR_VAR static io::u32 _13 = _0+13;
-        IO_CONSTEXPR_VAR static io::u32 _14 = _0+14;
-        IO_CONSTEXPR_VAR static io::u32 _15 = _0+15;
-        IO_CONSTEXPR_VAR static io::u32 _16 = _0+16;
-        IO_CONSTEXPR_VAR static io::u32 _17 = _0+17;
-        IO_CONSTEXPR_VAR static io::u32 _18 = _0+18;
-        IO_CONSTEXPR_VAR static io::u32 _19 = _0+19;
-        IO_CONSTEXPR_VAR static io::u32 _20 = _0+20;
-        IO_CONSTEXPR_VAR static io::u32 _21 = _0+21;
-        IO_CONSTEXPR_VAR static io::u32 _22 = _0+22;
-        IO_CONSTEXPR_VAR static io::u32 _23 = _0+23;
-        IO_CONSTEXPR_VAR static io::u32 _24 = _0+24;
-        IO_CONSTEXPR_VAR static io::u32 _25 = _0+25;
-        IO_CONSTEXPR_VAR static io::u32 _26 = _0+26;
-        IO_CONSTEXPR_VAR static io::u32 _27 = _0+27;
-        IO_CONSTEXPR_VAR static io::u32 _28 = _0+28;
-        IO_CONSTEXPR_VAR static io::u32 _29 = _0+29;
-        IO_CONSTEXPR_VAR static io::u32 _30 = _0+30;
-        IO_CONSTEXPR_VAR static io::u32 _31 = _0+31;
-    } texture_unit;
+    enum class TexUnit : io::u32 {
+         _0 = 0x84C0, _1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _13, _14, _15, _16, _17, _18, _19, _20, _21, _22, _23, _24, _25, _26, _27, _28, _29, _30, _31,
+    };
 
-    enum class TextureParam : io::u32 {
+    enum class TexParam : io::u32 {
         MinFilter = 0x2801,
         MagFilter = 0x2800,
         WrapS = 0x2802,
@@ -166,18 +168,249 @@ namespace gl {
         // others
     };
 
-    enum class TextureFormat : io::u32 {
-        RGBA = 0x1908,
-        RGB = 0x1907,
+    // Initially is set to `Repeat`
+    enum class TexWrap : int {
+        ClampToEdge = 0x812F,
+        ClampToBorder = 0x812D,
+        MirroredRepeat = 0x8370,
+        Repeat = 0x2901
     };
 
-    enum class DataType : io::u32 {
-        UnsignedByte = 0x1401,
+    // -------------------------------------------------------------------------
+    // TexFormat: CPU-side channel order for pixel transfers (upload/download).
+    // This describes how the incoming bytes should be interpreted as channels.
+    // It does NOT define GPU VRAM storage (that's gl::InternalFormat).
+    // -------------------------------------------------------------------------
+    enum class TexFormat : int {
+        R  = 0x1903,  // One channel (red). Often used for masks, heightfields, single-channel data.
+        RG = 0x8227,  // Two channels (red, green). Common for two-component data (e.g., motion vectors, RG packed normals).
+        
+        // Red-Green-Blue is common as an upload format, but many
+        // engines avoid RGB GPU storage due to `alignment`/`bandwidth pitfalls`,
+        RGB = 0x1907,
+        RGBA = 0x1908,
+
+        // BGR/BGRA describe *byte order* in CPU memory. Useful when loading images from APIs that output BGR(A).
+        BGR = 0x80E0, // blue-green-red
+        BGRA = 0x80E1, // blue-green-red-alpha
     };
+
+    // -------------------------------------------------------------------------
+    // InternalFormat: GPU storage layout in VRAM (glTexImage2D 'internalFormat').
+    // This defines:
+    //   - component count (R / RG / RGB / RGBA / depth / depth+stencil)
+    //   - bit widths (8/16/32 etc)
+    //   - numeric interpretation (UNORM, SNORM, FLOAT, INT, UINT, SRGB, compressed)
+    //
+    // Suffix meaning (sampling):
+    //   (none)         UNORM (or special packed float/srgb) -> sampler* returns normalized float
+    //   _SNORM         SNORM -> sampler* returns float in [-1, 1]
+    //   _F             float -> sampler* returns float (real float storage)
+    //   _I / _UI       integer -> isampler*/usampler* returns int/uint vectors (no normalization)
+    //
+    // IMPORTANT:
+    //   InternalFormat is about VRAM. It does not need to match the upload 'DataType'.
+    //   OpenGL converts CPU data into this storage on upload.
+    // -------------------------------------------------------------------------
+    enum class InternalFormat : int {
+        // TODO: gl core 4 formats
+
+        // ----------------------------- RGBA -----------------------------
+        RGBA32_F  = 0x8814, // 4×32-bit float (128 bpp). Highest precision color/storage; expensive in bandwidth.
+        RGBA32_I  = 0x8D82, // 4×32-bit signed integer (128 bpp). For integer textures (no normalization). Use `isampler2D`.
+        RGBA32_UI = 0x8D70, // 4×32-bit unsigned integer (128 bpp). For integer textures. Use usampler2D.
+        RGBA16    = 0x805B, // 4×16-bit UNORM (64 bpp). Stored as integers; sampled as float in [0..1].
+        RGBA16_F  = 0x881A, // 4×16-bit float (64 bpp). Common HDR intermediate format (lighting/bloom).
+        RGBA16_I  = 0x8D88, // 4×16-bit signed integer (64 bpp). Integer texture. isampler2D.
+        RGBA16_UI = 0x8D76, // 4×16-bit unsigned integer (64 bpp). Integer texture. usampler2D.
+        RGBA8     = 0x8058, // 4×8-bit UNORM (32 bpp). Default "color texture" format.
+        RGBA8_UI  = 0x8D7C, // 4×8-bit unsigned integer (32 bpp). Integer texture for IDs/masks/etc. usampler2D.
+
+        // 4×8-bit sRGB color + 8-bit alpha. Stored in sRGB space; on sampling converts to linear float.
+        // Use for albedo/UI authored in sRGB. Do NOT use for data/normal maps.
+        SRGB8_A8  = 0x8C43,
+
+        // 10/10/10/2 packed UNORM (32 bpp). Sampled as float [0..1].
+        // Good for compact HDR-ish buffers or normals (with care).
+        RGB10_A2  = 0x8059,
+
+        // Same bit layout as RGB10_A2 but *UNSIGNED INTEGER* interpretation.
+        // Sample with usampler* and you get raw integer ranges: RGB ∈ [0..1023], A ∈ [0..3].
+        RGB10_A2_UI = 0x906F,
+
+        // Packed float format: R=11f, G=11f, B=10f (no alpha), 32 bpp.
+        // Great HDR color buffer when alpha not needed; higher quality than 10:10:10:2 for lighting.
+        R11_G11_B10_F = 0x8C3A,
+        RGBA16_SNORM = 0x8F9B, // Signed normalized variant (sampled to [-1,1]).
+        RGBA8_SNORM  = 0x8F97, // Signed normalized variant (sampled to [-1,1]).
+
+        // ----------------------------- RGB -----------------------------
+
+        RGB32_F  = 0x8815,
+        RGB32_I  = 0x8D83,
+        RGB32_UI = 0x8D71,
+
+        RGB16    = 0x8054, // GL_RGB16 (UNORM)
+        RGB16_F  = 0x881B,
+        RGB16_I  = 0x8D89,
+        RGB16_UI = 0x8D77,
+        RGB16_SNORM = 0x8F9A,
+
+        RGB8     = 0x8051, // GL_RGB8 (UNORM)
+        RGB8_I   = 0x8D8F,
+        RGB8_UI  = 0x8D7D,
+        RGB8_SNORM = 0x8F96,
+
+        SRGB8 = 0x8C41, // sRGB without alpha (for color-only textures).
+
+        // Packed HDR with shared exponent: RGB mantissa 9 bits each + shared exponent 5 bits (32 bpp).
+        // Compact HDR-ish storage; used sometimes for environment/light probes.
+        RGB9_E5 = 0x8C3D,
+
+        // ----------------------------- RG -----------------------------
+
+        RG32_F  = 0x8230,
+        RG32_I  = 0x823B,
+        RG32_UI = 0x823C,
+
+        RG16    = 0x822C, // GL_RG16 (UNORM)
+        RG16_F  = 0x822F,
+        RG16_I  = 0x8239,
+        RG16_UI = 0x823A,
+        RG16_SNORM = 0x8F99,
+
+        RG8     = 0x822B, // GL_RG8 (UNORM)
+        RG8_I   = 0x8237,
+        RG8_UI  = 0x8238,
+        RG8_SNORM = 0x8F95,
+
+
+        // ----------------------------- R -----------------------------
+
+        R32_F  = 0x822E,
+        R32_I  = 0x8235,
+        R32_UI = 0x8236,
+
+        R16_F  = 0x822D,
+        R16_I  = 0x8233,
+        R16_UI = 0x8234,
+        R16_SNORM = 0x8F98,
+
+        R8     = 0x8229, // GL_R8 (UNORM)
+        R8_I   = 0x8231,
+        R8_UI  = 0x8232,
+        R8_SNORM = 0x8F94,
+
+
+        // -------------------------- Compressed (RGTC / BC4/BC5) --------------------------
+        //
+        // These formats are block-compressed. You typically upload via glCompressedTexImage*,
+        // not glTexImage2D, and DataType/TexFormat do not apply in the same way.
+        //
+        // RGTC1 == BC4 (single-channel), RGTC2 == BC5 (two-channel).
+        // Common use:
+        //   - BC4: single channel masks/height.
+        //   - BC5: two-channel normal maps (XY), reconstruct Z in shader.
+        //
+        // Signed variants decode to signed normalized values.
+        COMPRESSED_RED_RGTC1         = 0x8DBB,
+        COMPRESSED_SIGNED_RED_RGTC1  = 0x8DBC,
+        COMPRESSED_RG_RGTC2          = 0x8DBD,
+        COMPRESSED_SIGNED_RG_RGTC2   = 0x8DBE,
+
+
+        // ----------------------------- Depth / Depth-Stencil -----------------------------
+
+        DEPTH_COMPONENT32_F = 0x8CAC, // 32-bit float depth. High precision; useful for large ranges, sometimes slower/bigger.        
+        DEPTH_COMPONENT24   = 0x81A6, // 24-bit UNORM depth. Most common depth buffer format.
+        DEPTH_COMPONENT16   = 0x81A5, // 16-bit UNORM depth. Smaller/faster, lower precision.
+        DEPTH32F_STENCIL8   = 0x8CAD, // 32f depth + 8-bit stencil. Precision depth with stencil.
+        DEPTH24_STENCIL8    = 0x88F0, // 24-bit depth + 8-bit stencil. Most common depth-stencil format.
+    };
+
+    // -------------------------------------------------------------------------
+    // DataType: CPU-side representation/packing for pixel transfer (glTexImage2D 'type').
+    // This tells GL how to parse your RAM bytes into components described by TexFormat.
+    // It does NOT define the GPU storage; GL will convert into InternalFormat.
+    // -------------------------------------------------------------------------
+    enum class DataType : io::u32 {
+        // Plain scalar element types (one element per component).
+        UnsignedByte  = 0x1401, // GL_UNSIGNED_BYTE
+        Byte          = 0x1400, // GL_BYTE
+        UnsignedShort = 0x1403, // GL_UNSIGNED_SHORT
+        Short         = 0x1402, // GL_SHORT
+        UnsignedInt   = 0x1405, // GL_UNSIGNED_INT
+        Int           = 0x1404, // GL_INT
+        Float         = 0x1406, // GL_FLOAT
+
+        // Packed pixel layouts (multiple components packed into a single integer).
+        // Use when your CPU source is already in a packed layout (common in some image/codec outputs).
+        UByte_3_3_2        = 0x8032, // GL_UNSIGNED_BYTE_3_3_2
+        UByte_2_3_3_Rev    = 0x8362, // GL_UNSIGNED_BYTE_2_3_3_REV
+
+        UShort_5_6_5       = 0x8363, // GL_UNSIGNED_SHORT_5_6_5
+        UShort_5_6_5_Rev   = 0x8364, // GL_UNSIGNED_SHORT_5_6_5_REV
+
+        UShort_4_4_4_4     = 0x8033, // GL_UNSIGNED_SHORT_4_4_4_4
+        UShort_4_4_4_4_Rev = 0x8365, // GL_UNSIGNED_SHORT_4_4_4_4_REV
+
+        UShort_5_5_5_1     = 0x8034, // GL_UNSIGNED_SHORT_5_5_5_1
+        UShort_1_5_5_5_Rev = 0x8366, // GL_UNSIGNED_SHORT_1_5_5_5_REV
+
+        UInt_8_8_8_8       = 0x8035, // GL_UNSIGNED_INT_8_8_8_8
+        UInt_8_8_8_8_Rev   = 0x8367, // GL_UNSIGNED_INT_8_8_8_8_REV
+
+        UInt_10_10_10_2    = 0x8036, // GL_UNSIGNED_INT_10_10_10_2
+        UInt_2_10_10_10_Rev= 0x8368, // GL_UNSIGNED_INT_2_10_10_10_REV
+    };
+
 
     enum class GetParam : io::u32 {
         Viewport = 0x0BA2,
         // others
+    };
+
+    // The texture minifying function. Used whenever the level-of-detail function used
+    // when sampling from the texture determines that the texture should be minified. 
+    enum class MinifyingFilter : io::u32 {
+        // Returns the weighted average of the four texture elements that are closest to the specified texture coordinates.
+        // These can include items wrapped or repeated from other parts of a texture, depending on the values of `gl::TexParam::WrapS` and `gl::TexParam::WrapT`, and on the exact mapping. 
+        Nearest = 0x2600,
+
+        // Returns the weighted average of the four texture elements that are closest to the specified texture coordinates.
+        // These can include items wrapped or repeated from other parts of a texture, depending on the values of `gl::TexParam::WrapS` and `gl::TexParam::WrapT`, and on the exact mapping. 
+        Linear = 0x2601,
+
+        // Chooses the mipmap that most closely matches the size of the pixel being textured and
+        // uses the `gl::MinifyingFilter::Nearest` criterion (the texture element closest to the specified texture coordinates) to produce a texture value. 
+        NearestMipmapNearest = 0x2700,
+        
+        // Chooses the mipmap that most closely matches the size of the pixel being textured and
+        // uses the `gl::MinifyingFilter::Linear` criterion (a weighted average of the four texture elements that are closest to the specified texture coordinates) to produce a texture value. 
+        LinearMipmapNearest  = 0x2701,
+        
+        // Chooses the two mipmaps that most closely match the size of the pixel being textured and
+        // uses the `gl::MinifyingFilter::Nearest` criterion (the texture element closest to the specified texture coordinates ) to produce a texture value from each mipmap. The final texture value is a weighted average of those two values. 
+        NearestMipmapLinear  = 0x2702,
+        
+        // Chooses the two mipmaps that most closely match the size of the pixel being textured and
+        // uses the `gl::MinifyingFilter::Linear` criterion (a weighted average of the texture elements that are closest to the specified texture coordinates) to produce a texture value from each mipmap. The final texture value is a weighted average of those two values. 
+        LinearMipmapLinear   = 0x2703,
+    };
+
+    // The texture magnification function. Used whenever the level-of-detail function used when
+    // sampling from the texture determines that the texture should be magified.
+    // It sets the texture magnification function to either `gl::MagnifyingFilter::Nearest` or `gl::MagnifyingFilter::Linear` (see below).
+    // `gl::MagnifyingFilter::Nearest` is generally faster than `gl::MagnifyingFilter::Linear`,
+    // but it can produce textured images with sharper edges because the transition between texture elements is not as smooth.
+    // The initial value is `Linear`. 
+    enum class MagnifyingFilter : io::u32 {
+        // Returns the value of the texture element that is nearest (in Manhattan distance) to the specified texture coordinates. 
+        Nearest = 0x2600,
+
+        // Returns the weighted average of the texture elements that are closest to the specified texture coordinates.
+        // These can include items wrapped or repeated from other parts of a texture, depending on the values of `gl::TexParam::WrapS` and `gl::TexParam::WrapT`, and on the exact mapping. 
+        Linear = 0x2601,
     };
 
     enum class PrimitiveMode : io::u32 {
@@ -246,22 +479,9 @@ namespace gl {
 // ----------------------------------------------------------------------------
 // GL_VERSION_1_1    // Core state
 // ----------------------------------------------------------------------------
-    GL_CALL_CUSTOM(
-        /*     name */ GetError,
-        /* ret    T */ int,
-        /* proc   T */ (),
-        /*     decl */ (),
-        /*     pass */ ())
-
+    GL_CALL_CUSTOM(GetError, int, (), (), ())
     GL_CALL_CUSTOM(GetIntegerv, void, (io::u32, int*), (io::u32 pname, int* data), (pname, data))
-
-    GL_CALL_CUSTOM(
-        /*     name */ CullFace,
-        /* ret    T */ void,
-        /* proc   T */ (io::u32),
-        /*     decl */ (Face face),
-        /*     pass */ (static_cast<io::u32>(face)))
-
+    GL_CALL_CUSTOM(CullFace,    void, (io::u32),       (Face face),                (static_cast<io::u32>(face)))
     
     // GL_CALL_CUSTOM(PolygonMode, void,          // NOT SUPPORTED by OpenGL Core
     //     /* proc   T */ (io::u32, io::u32),
@@ -270,24 +490,42 @@ namespace gl {
 
     GL_CALL_CUSTOM(TexParameterf, void,
         /* proc   T */ (io::u32, io::u32, float),
-        /*     decl */ (TextureTarget target, TextureParam pname, float param),
+        /*     decl */ (TexTarget target, TexParam pname, float param),
         /*     pass */ (static_cast<io::u32>(target), static_cast<io::u32>(pname), param))
 
-    GL_CALL_CUSTOM(TexParameteri, void,
-        /* proc   T */ (io::u32, io::u32, int),
-        /*     decl */ (TextureTarget target, TextureParam pname, int param),
+    
+    /* 1a */ GL_CALL_CUSTOM(TexParameteri, void, (io::u32, io::u32, int),
+        /*     decl */ (TexTarget target, TexParam pname, int param),
         /*     pass */ (static_cast<io::u32>(target), static_cast<io::u32>(pname), param))
+    /* 1b */ GL_CALL_OVERLOAD(TexParameteri, void, (io::u32, io::u32, int),
+        /*     decl */ (TexTarget target, TexParam pname, MagnifyingFilter mag_mode),
+        /*     pass */ (static_cast<io::u32>(target), static_cast<io::u32>(pname), static_cast<int>(mag_mode)))
+    /* 1c */ GL_CALL_OVERLOAD(TexParameteri, void, (io::u32, io::u32, int),
+        /*     decl */ (TexTarget target, TexParam pname, MinifyingFilter min_mode),
+        /*     pass */ (static_cast<io::u32>(target), static_cast<io::u32>(pname), static_cast<int>(min_mode)))
+    /* 1d */ GL_CALL_OVERLOAD(TexParameteri, void, (io::u32, io::u32, int),
+        /*     decl */ (TexTarget target, TexParam pname, TexWrap wrap_mode),
+        /*     pass */ (static_cast<io::u32>(target), static_cast<io::u32>(pname), static_cast<int>(wrap_mode)))
 
-    GL_CALL_CUSTOM(TexImage2D, void,
-        /* proc   T */ (io::u32,
-                        int, int, int, int, int,
-                        io::u32, io::u32, const void*),
-        /*     decl */ (TextureTarget target,
+    GL_CALL_CUSTOM(PixelStorei, void, (io::u32, int), (io::u32 pname, int param), (pname, param))
+
+    /* 1a */ GL_CALL_CUSTOM(TexImage2D, void,
+        /* proc   T */ (io::u32, int,int,int,int,int, io::u32, io::u32, const void*),
+        /*     decl */ (TexTarget target,
+                        int level, InternalFormat internalformat, int width, int height, int border,
+                        TexFormat format, DataType type, const void* pixels),
+        /*     pass */ (static_cast<io::u32>(target),
+                        level, static_cast<int>(internalformat), width, height, border,
+                        static_cast<io::u32>(format), static_cast<io::u32>(type), pixels))
+    /* 1b */ GL_CALL_OVERLOAD(TexImage2D, void,
+        /* proc   T */ (io::u32, int,int,int,int,int, io::u32, io::u32, const void*),
+        /*     decl */ (TexTarget target,
                         int level, int internalformat, int width, int height, int border,
-                        TextureFormat format, DataType type, const void* pixels),
+                        TexFormat format, DataType type, const void* pixels),
         /*     pass */ (static_cast<io::u32>(target),
                         level, internalformat, width, height, border,
                         static_cast<io::u32>(format), static_cast<io::u32>(type), pixels))
+
 
     // ----------------------------------------------------------------------------
     // Usage in the render loop:
@@ -309,212 +547,87 @@ namespace gl {
     //     incorrectly hidden or mis-sorted by Z;
     //   • The stencil buffer may contain leftover stencil masks.
     // ----------------------------------------------------------------------------
-    GL_CALL_CUSTOM(Clear, void,
-        /* proc   T */ (io::u32),
-        /*     decl */ (io::u32 mask),
-        /*     pass */ (mask))
-
-    GL_CALL_CUSTOM(ClearColor, void,
-        /* proc   T */ (float, float, float, float),
-        /*     decl */ (float r, float g, float b, float a),
-        /*     pass */ (r, g, b, a))
-
-    GL_CALL_CUSTOM(Disable, void,
-        /* proc   T */ (io::u32),
-        /*     decl */ (Capability cap),
-        /*     pass */ (static_cast<io::u32>(cap)))
-
-    GL_CALL_CUSTOM(Enable, void,
-        /* proc   T */ (io::u32),
-        /*     decl */ (Capability cap),
-        /*     pass */ (static_cast<io::u32>(cap)))
-
-    GL_CALL_CUSTOM(BlendFunc, void,
-        /* proc   T */ (io::u32, io::u32),
-        /*     decl */ (BlendFactor sfactor, BlendFactor dfactor),
+    GL_CALL_CUSTOM(Clear, void, (io::u32), (io::u32 mask), (mask))
+    GL_CALL_CUSTOM(ClearColor, void, (float,float,float,float), (float r,float g,float b,float a),  (r, g, b, a))
+    GL_CALL_CUSTOM(Disable, void, (io::u32), (Capability cap), (static_cast<io::u32>(cap)))
+    GL_CALL_CUSTOM(Enable,  void, (io::u32), (Capability cap), (static_cast<io::u32>(cap)))
+    GL_CALL_CUSTOM(BlendFunc, void, (io::u32, io::u32), (BlendFactor sfactor, BlendFactor dfactor),
         /*     pass */ (static_cast<io::u32>(sfactor), static_cast<io::u32>(dfactor)))
 
-    GL_CALL_CUSTOM(GetFloatv, void,
-        /* proc   T */ (io::u32, float*),
-        /*     decl */ (GetParam pname, float* data),
-        /*     pass */ (static_cast<io::u32>(pname), data))
-
-    GL_CALL_CUSTOM(GetString, const unsigned char*,
-        /* proc   T */ (io::u32),
-        /*     decl */ (io::u32 name),
-        /*     pass */ (name))
-
-    GL_CALL_CUSTOM(Viewport, void,
-        /* proc   T */ (int, int, int, int),
-        /*     decl */ (int x, int y, int width, int height),
-        /*     pass */ (x, y, width, height))
-
-    GL_CALL_CUSTOM(DrawArrays, void,
-        /* proc   T */ (io::u32, int, int),
-        /*     decl */ (PrimitiveMode mode, int first, int count),
-        /*     pass */ (static_cast<io::u32>(mode), first, count))
-
-    GL_CALL_CUSTOM(DrawElements, void,
-        /* proc   T */ (io::u32, int, io::u32, const void*),
+    GL_CALL_CUSTOM(GetFloatv, void, (io::u32, float*), (GetParam pname, float* data), (static_cast<io::u32>(pname), data))
+    GL_CALL_CUSTOM(GetString, const unsigned char*, (io::u32), (io::u32 name), (name))
+    GL_CALL_CUSTOM(Viewport, void, (int,int,int,int), (int x, int y, int width, int height), (x, y, width, height))
+    GL_CALL_CUSTOM(DrawArrays, void, (io::u32, int, int), (PrimitiveMode mode, int first, int count), (static_cast<io::u32>(mode), first, count))
+    GL_CALL_CUSTOM(DrawElements, void, (io::u32, int, io::u32, const void*),
         /*     decl */ (PrimitiveMode mode,            int count,
                         DrawElementsType type, const void* indices),
-        /*     pass */ (static_cast<io::u32>(mode), count,
-                        static_cast<io::u32>(type), indices))
+        /*     pass */ (static_cast<io::u32>(mode), count, static_cast<io::u32>(type), indices))
 
-    GL_CALL_CUSTOM(BindTexture, void,
-        /* proc   T */ (io::u32, io::u32),
-        /*     decl */ (TextureTarget target, io::u32 texture),
-        /*     pass */ (static_cast<io::u32>(target), texture))
-
-    GL_CALL_CUSTOM(DeleteTextures, void,
-        /* proc   T */ (int, const io::u32*),
-        /*     decl */ (int n, const io::u32* textures),
-        /*     pass */ (n, textures))
-
-    GL_CALL_CUSTOM(GenTextures, void,
-        /* proc   T */ (int, io::u32*),
-        /*     decl */ (int n, io::u32* textures),
-        /*     pass */ (n, textures))
+    GL_CALL_CUSTOM(BindTexture, void, (io::u32, io::u32), (TexTarget target, io::u32 texture), (static_cast<io::u32>(target), texture))
+    GL_CALL_CUSTOM(DeleteTextures, void, (int, const io::u32*), (int n, const io::u32* textures), (n, textures))
+    GL_CALL_CUSTOM(GenTextures, void, (int, io::u32*), (int n, io::u32* textures), (n, textures))
 
 // ----------------------------------------------------------------------------
 // GL_VERSION_1_3
 // ----------------------------------------------------------------------------
-
-    GL_CALL_CUSTOM(ActiveTexture, void,
-        /* proc   T */ (io::u32),
-        /*     decl */ (io::u32 unit),
-        /*     pass */ (unit))
+    GL_CALL_CUSTOM(ActiveTexture, void, (io::u32), (TexUnit unit), (static_cast<io::u32>(unit)))
 
 // ----------------------------------------------------------------------------
 // GL_VERSION_1_5
 // ----------------------------------------------------------------------------
-
-    GL_CALL_CUSTOM(BindBuffer, void,
-        /* proc   T */ (io::u32, io::u32),
-        /*     decl */ (BufferTarget target, io::u32 buffer),
-        /*     pass */ (static_cast<io::u32>(target), buffer))
-
-    GL_CALL_CUSTOM(DeleteBuffers, void,
-        /* proc   T */ (int, const io::u32*),
-        /*     decl */ (int n, const io::u32* buffers),
-        /*     pass */ (n, buffers))
-
-    GL_CALL_CUSTOM(GenBuffers, void,
-        /* proc   T */ (int, io::u32*),
-        /*     decl */ (int n, io::u32* buffers),
-        /*     pass */ (n, buffers))
-
-    GL_CALL_CUSTOM(BufferData, void,
-        /* proc   T */ (io::u32, intptr_t, const void*, io::u32),
+    GL_CALL_CUSTOM(BindBuffer, void, (io::u32, io::u32), (BufferTarget target, io::u32 buffer), (static_cast<io::u32>(target), buffer))
+    GL_CALL_CUSTOM(DeleteBuffers, void, (int, const io::u32*), (int n, const io::u32* buffers), (n, buffers))
+    GL_CALL_CUSTOM(GenBuffers, void, (int, io::u32*), (int n, io::u32* buffers), (n, buffers))
+    GL_CALL_CUSTOM(BufferData, void, /* proc   T */ (io::u32, intptr_t, const void*, io::u32),
         /*     decl */ (BufferTarget target, intptr_t size, const void* data, BufferUsage usage),
-        /*     pass */ (
-            static_cast<io::u32>(target),
-            size,
-            data,
-            static_cast<io::u32>(usage)
-            ))
+        /*     pass */ (static_cast<io::u32>(target), size, data, static_cast<io::u32>(usage)))
 
-    GL_CALL_CUSTOM(BufferSubData, void,
-        /* proc   T */ (io::u32, intptr_t, intptr_t, const void*),
+    GL_CALL_CUSTOM(BufferSubData, void, /* proc   T */ (io::u32, intptr_t, intptr_t, const void*),
         /*     decl */ (BufferTarget target, intptr_t offset, intptr_t size, const void* data),
-        /*     pass */ (
-            static_cast<io::u32>(target),
-            offset,
-            size,
-            data
-            ))
+        /*     pass */ (static_cast<io::u32>(target), offset, size, data))
 
 // ----------------------------------------------------------------------------
 // GL_VERSION_2_0
 // ----------------------------------------------------------------------------
-    
-    GL_CALL_CUSTOM(AttachShader, void,
-        /* proc   T */ (io::u32, io::u32),
-        /*     decl */ (io::u32 program, io::u32 shader),
-        /*     pass */ (program, shader))
-    
-    GL_CALL_CUSTOM(CompileShader, void,
-        /* proc   T */ (io::u32),
-        /*     decl */ (io::u32 shader),
-        /*     pass */ (shader))
-    
-    GL_CALL_CUSTOM(CreateProgram, io::u32,
-        /* proc   T */ (void),
-        /*     decl */ (),
-        /*     pass */ ())
-    
-    GL_CALL_CUSTOM(CreateShader, io::u32,
-        /* proc   T */ (io::u32),
-        /*     decl */ (ShaderType type),
-        /*     pass */ (static_cast<io::u32>(type)))
-    
-    GL_CALL_CUSTOM(DeleteProgram, void,
-        /* proc   T */ (io::u32),
-        /*     decl */ (io::u32 program),
-        /*     pass */ (program))
-    
-    GL_CALL_CUSTOM(DeleteShader, void,
-        /* proc   T */ (io::u32),
-        /*     decl */ (io::u32 shader),
-        /*     pass */ (shader))
-    
-    GL_CALL_CUSTOM(EnableVertexAttribArray, void,
-        /* proc   T */ (io::u32),
-        /*     decl */ (io::u32 index),
-        /*     pass */ (index))
-    
-    GL_CALL_CUSTOM(GetProgramiv, void,
-        /* proc   T */ (io::u32, io::u32, int*),
+    GL_CALL_CUSTOM(AttachShader, void, (io::u32, io::u32), (io::u32 program, io::u32 shader), (program, shader))
+    GL_CALL_CUSTOM(CompileShader, void, (io::u32), (io::u32 shader), (shader))
+    GL_CALL_CUSTOM(CreateProgram, io::u32, (void), (), ())
+    GL_CALL_CUSTOM(CreateShader, io::u32, (io::u32), (ShaderType type), (static_cast<io::u32>(type)))
+    GL_CALL_CUSTOM(DeleteProgram, void, (io::u32), (io::u32 program), (program))
+    GL_CALL_CUSTOM(DeleteShader, void, (io::u32), (io::u32 shader), (shader))
+    GL_CALL_CUSTOM(EnableVertexAttribArray, void, (io::u32), (io::u32 index), (index))
+    GL_CALL_CUSTOM(GetProgramiv, void, (io::u32, io::u32, int*),
         /*     decl */ (io::u32 program, ProgramProperty pname, int* params),
         /*     pass */ (program, static_cast<io::u32>(pname), params))
     
-    GL_CALL_CUSTOM(GetProgramInfoLog, void,
-        /* proc   T */ (io::u32, int, int*, char*),
+    GL_CALL_CUSTOM(GetProgramInfoLog, void, (io::u32, int, int*, char*),
         /*     decl */ (io::u32 program, int bufSize, int* length, char* infoLog),
         /*     pass */ (program, bufSize, length, infoLog))
     
-    GL_CALL_CUSTOM(GetShaderiv, void,
-        /* proc   T */ (io::u32, io::u32, int*),
+    GL_CALL_CUSTOM(GetShaderiv, void, (io::u32, io::u32, int*),
         /*     decl */ (io::u32 shader, ShaderProperty pname, int* params),
         /*     pass */ (shader, static_cast<io::u32>(pname), params))
     
-    GL_CALL_CUSTOM(GetShaderInfoLog, void,
-        /* proc   T */ (io::u32, int, int*, char*),
+    GL_CALL_CUSTOM(GetShaderInfoLog, void, (io::u32, int, int*, char*),
         /*     decl */ (io::u32 shader, int bufSize, int* length, char* infoLog),
         /*     pass */ (shader, bufSize, length, infoLog))
     
-    GL_CALL_CUSTOM(GetUniformLocation, int,
-        /* proc   T */ (io::u32, const char*),
-        /*     decl */ (io::u32 program, const char* name),
-        /*     pass */ (program, name))
-    
-    GL_CALL_CUSTOM(LinkProgram, void,
-        /* proc   T */ (io::u32),
-        /*     decl */ (io::u32 program),
-        /*     pass */ (program))
-    
-    GL_CALL_CUSTOM(ShaderSource, void,
-        /* proc   T */ (io::u32, int, const char* const*, const int*),
+    GL_CALL_CUSTOM(GetUniformLocation, int, (io::u32, const char*), (io::u32 program, const char* name), (program, name))
+    GL_CALL_CUSTOM(LinkProgram, void, (io::u32), (io::u32 program), (program))
+    GL_CALL_CUSTOM(ShaderSource, void, (io::u32, int, const char* const*, const int*),
         /*     decl */ (io::u32 shader, int count, const char* const* strings, const int* lengths),
         /*     pass */ (shader, count, strings, lengths))
     
-    GL_CALL_CUSTOM(UseProgram, void,
-        /* proc   T */ (io::u32),
-        /*     decl */ (io::u32 program),
-        /*     pass */ (program))
+    GL_CALL_CUSTOM(UseProgram, void, (io::u32), (io::u32 program), (program))
     
-    GL_CALL_CUSTOM(Uniform1i, void,
-        /* proc   T */ (int, int),
-        /*     decl */ (int location, int v0),
-        /*     pass */ (location, v0))
-    
-    GL_CALL_CUSTOM(UniformMatrix4fv, void,
-        /* proc   T */ (int, int, unsigned char, const float*),
+    GL_CALL_CUSTOM(Uniform1i, void, (int, int), (int location, int v0), (location, v0))
+    GL_CALL_CUSTOM(Uniform1f, void, (int, float), (int location, float v0), (location, v0))
+    GL_CALL_CUSTOM(Uniform2f, void, (int, float, float), (int location, float v0, float v1), (location, v0, v1))
+    GL_CALL_CUSTOM(UniformMatrix4fv, void, (int, int, unsigned char, const float*),
         /*     decl */ (int location, int count, bool transpose, const float* value),
         /*     pass */ (location, count, static_cast<unsigned char>(transpose), value))
     
-    GL_CALL_CUSTOM(VertexAttribPointer, void,
-        /* proc   T */ (io::u32, int, io::u32, unsigned char, int, const void*),
+    GL_CALL_CUSTOM(VertexAttribPointer, void, (io::u32, int, io::u32, unsigned char, int, const void*),
         /*     decl */ (io::u32 index, int size, DrawElementsType type, bool normalized, int stride, const void* pointer),
         /*     pass */ (index, size, static_cast<io::u32>(type), static_cast<unsigned char>(normalized), stride, pointer))
 #endif // Core 200
@@ -524,30 +637,15 @@ namespace gl {
 // GL_VERSION_3_0_0
 // ----------------------------------------------------------------------------
 
-    GL_CALL_CUSTOM(BindBufferBase, void,
-        /* proc   T */ (io::u32, io::u32, io::u32),
+    GL_CALL_CUSTOM(BindBufferBase, void, (io::u32, io::u32, io::u32),
         /*     decl */ (BufferTarget target, io::u32 index, io::u32 buffer),
         /*     pass */ (static_cast<io::u32>(target), index, buffer))
-
-    GL_CALL_CUSTOM(VertexAttribIPointer, void,
-        /* proc   T */ (io::u32, int, io::u32, int, const void*),
+    GL_CALL_CUSTOM(VertexAttribIPointer, void, (io::u32, int, io::u32, int, const void*),
         /*     decl */ (io::u32 index, int size, DrawElementsType type, int stride, const void* pointer),
         /*     pass */ (index, size, static_cast<io::u32>(type), stride, pointer))
-
-    GL_CALL_CUSTOM(BindVertexArray, void,
-        /* proc   T */ (io::u32),
-        /*     decl */ (io::u32 _array),
-        /*     pass */ (_array))
-
-    GL_CALL_CUSTOM(DeleteVertexArrays, void,
-        /* proc   T */ (int, const io::u32*),
-        /*     decl */ (int n, const io::u32* arrays),
-        /*     pass */ (n, arrays))
-
-    GL_CALL_CUSTOM(GenVertexArrays, void,
-        /* proc   T */ (int, io::u32*),
-        /*     decl */ (int n, io::u32* arrays),
-        /*     pass */ (n, arrays))
+    GL_CALL_CUSTOM(BindVertexArray, void, (io::u32), (io::u32 _array), (_array))
+    GL_CALL_CUSTOM(DeleteVertexArrays, void, (int, const io::u32*), (int n, const io::u32* arrays), (n, arrays))
+    GL_CALL_CUSTOM(GenVertexArrays, void, (int, io::u32*), (int n, io::u32* arrays), (n, arrays))
 #endif // Core 3.0.0
 
 namespace gl {
@@ -556,8 +654,8 @@ namespace gl {
     static inline void query_core_version(int& maj, int& min) noexcept {
         maj = 0; min = 0;
         // safe even if pointers missing? -> require load of GetIntegerv first
-        gl::GetIntegerv(gl_version.major, &maj);
-        gl::GetIntegerv(gl_version.minor, &min);
+        gl::GetIntegerv(GlVersionParam::major, &maj);
+        gl::GetIntegerv(GlVersionParam::minor, &min);
     } // query_core_version
 
     // Load minimum set depending on *real* desktop GL core version.
@@ -598,6 +696,7 @@ namespace gl {
         IO_GL_LOAD(GenTextures);
         IO_GL_LOAD(BindTexture);
         IO_GL_LOAD(TexParameteri);
+        IO_GL_LOAD(PixelStorei);
         IO_GL_LOAD(TexParameterf);
         IO_GL_LOAD(TexImage2D);
         IO_GL_LOAD(DeleteTextures);
@@ -619,6 +718,8 @@ namespace gl {
 
         IO_GL_LOAD(GetUniformLocation);
         IO_GL_LOAD(Uniform1i);
+        IO_GL_LOAD(Uniform1f);
+        IO_GL_LOAD(Uniform2f);
         IO_GL_LOAD(UniformMatrix4fv);
 
         IO_GL_LOAD(EnableVertexAttribArray);
@@ -669,7 +770,7 @@ namespace gl {
             GetShaderiv(V, ShaderProperty::CompileStatus, &success);
             if (!success) {
                 GetShaderInfoLog(V, 512, nullptr, info);
-                io::out << "vertex shader error: " << info << io::out.endl;
+                io::out << "shader compile failed: " << info << io::out.endl;
                 DeleteShader(V);
                 return false;
             }
@@ -680,7 +781,7 @@ namespace gl {
             GetShaderiv(F, ShaderProperty::CompileStatus, &success);
             if (!success) {
                 GetShaderInfoLog(F, 512, nullptr, info);
-                io::out << "fragment shader error: " << info << io::out.endl;
+                io::out << "fshader compile failed: " << info << io::out.endl;
                 DeleteShader(V);
                 DeleteShader(F);
                 return false;
@@ -693,7 +794,7 @@ namespace gl {
             GetProgramiv(P, ProgramProperty::LinkStatus, &success);
             if (!success) {
                 GetProgramInfoLog(P, 512, nullptr, info);
-                ::io::out << "shader program failed: " << info << ::io::out.endl;
+                ::io::out << "shader link failed: " << info << ::io::out.endl;
                 DeleteShader(V);
                 DeleteShader(F);
                 DeleteProgram(P);
@@ -721,6 +822,46 @@ namespace gl {
         inline bool failed() const noexcept { return _id_program == 0; }
 
         inline void Use() const noexcept { gl::UseProgram(_id_program); }
+
+
+        static inline bool compile_shader(io::u32& out_sh, gl::ShaderType type, const char* src) noexcept {
+            out_sh = gl::CreateShader(type);
+            if (!out_sh) return false;
+            gl::ShaderSource(out_sh, 1, &src, nullptr);
+            gl::CompileShader(out_sh);
+
+            int ok = 0;
+            gl::GetShaderiv(out_sh, gl::ShaderProperty::CompileStatus, &ok);
+            if (!ok) {
+                char log[512]{};
+                gl::GetShaderInfoLog(out_sh, (int)sizeof(log)-1, nullptr, log);
+                io::out << "shader compile failed: " << log << io::out.endl;
+                gl::DeleteShader(out_sh);
+                out_sh = 0;
+                return false;
+            }
+            return true;
+        }
+
+        static inline bool link_program(io::u32& out_prog, io::u32 vs, io::u32 fs) noexcept {
+            out_prog = gl::CreateProgram();
+            if (!out_prog) return false;
+            gl::AttachShader(out_prog, vs);
+            gl::AttachShader(out_prog, fs);
+            gl::LinkProgram(out_prog);
+        
+            int ok = 0;
+            gl::GetProgramiv(out_prog, gl::ProgramProperty::LinkStatus, &ok);
+            if (!ok) {
+                char log[512]{};
+                gl::GetProgramInfoLog(out_prog, (int)sizeof(log)-1, nullptr, log);
+                io::out << "program link failed: " << log << io::out.endl;
+                gl::DeleteProgram(out_prog);
+                out_prog = 0;
+                return false;
+            }
+            return true;
+        }
 }; // struct Shader
 
 struct Buffer {

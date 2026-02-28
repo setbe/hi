@@ -2194,7 +2194,7 @@ namespace native {
     inline const Out& Out::operator<<(u64 v) const noexcept { write_unsigned(v); return *this; }
 
     // --- complex types ---
-    inline const Out& Out::operator<<(char_view v) const noexcept { write(v.data(), v.size()); return *this; }
+    inline const Out& Out::operator<<(char_view v) const noexcept { write_str(v.data(), v.size()); return *this; }
     inline const Out& Out::operator<<(const string& v) const noexcept { return *this << v.as_view(); }
     inline const Out& Out::operator<<(const wstring& w) const noexcept {
 #ifndef IO_TERMINAL
