@@ -1,15 +1,14 @@
 ﻿#pragma once
 
-#if defined(_CONSOLE) || defined(CONSOLE) && !defined(IO_TERMINAL)
-#   define IO_TERMINAL
-#endif
-
 #if !defined(_DEBUG) && !defined(NDEBUG)
 #   define _DEBUG
 #endif
 
-// Macro may come from XLib
-#ifdef None
+#if defined(_CONSOLE) || defined(CONSOLE) && !defined(IO_TERMINAL)
+#   define IO_TERMINAL
+#endif
+
+#ifdef None // Macro may come from XLib
 #   undef None
 #endif
 
@@ -152,7 +151,7 @@ static void(IO_CDECL* _onexit(void(IO_CDECL* func)(void)))(void) {
 
 
 // `main` was replaced with `WinMain` due to `_CONSOLE` macro absence
-#if defined(_WIN32) && !defined(IO_TERMINAL)
+#if defined(_MSC_VER) && !defined(IO_TERMINAL)
 #   define main() __stdcall WinMain( HINSTANCE hInstance,                     \
                                      HINSTANCE hPrevInstance,                 \
                                      LPSTR     lpCmdLine,                     \
@@ -384,6 +383,16 @@ namespace io {
             if (r>=d) { r-=d; q |= (1ull<<i); }
         }
         return (u32)q;
+    }
+
+    static inline u8 f2u8(float x) noexcept {
+        x = x < 0.f ? 0.f : (x > 1.f ? 1.f : x);
+        float y = x * 255.f + 0.5f;
+        // guarrantee range [0, 255], then cast<int>
+        int iy = (int)y;
+        if (iy < 0) iy = 0;
+        if (iy > 255) iy = 255;
+        return (u8)iy;
     }
 
     // ----------------- Basic SFINAE Primitives --------------------
@@ -2157,11 +2166,11 @@ namespace native {
     inline void Out::write_float(double x, int precision) noexcept {
 #if !defined(IO_TERMINAL)
         return;
-#elif defined(IO_NOSTD) && defined(IO_MICROSHIT_NOSTD) && defined(_M_IX86)
+#elif !defined(IO_HAS_STD) && defined(_M_IX86)
         // In X86 Freestanding we DON'T print floats
         // avoiding call to _ftol2 and CRT.
         (void)x; (void)precision;
-        write_str("[float]");
+        write_str("[cannot print float on x86]");
         return;
 #else
         if (x < 0) { put('-'); x = -x; }
@@ -3284,12 +3293,11 @@ struct File {
             return good() || eof();
         }
         // 2) unknown size: chunked
-        char buf[4096]{};
-        io::char_view_mut chunk{ buf, sizeof(buf) };
+        io::string buf{};
+        if (!buf.reserve(4096)) return false;
         for (;;) {
-            io::usize r = read(chunk);
-            if (r == 0) break;
-            if (!out.append(io::char_view{ buf, r })) return false;
+            if (read(buf.as_mut_view()) == 0) break;
+            if (!out.append(buf.as_view())) return false;
         }
         return good() || eof();
     } // read_all

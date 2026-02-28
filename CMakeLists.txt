@@ -155,23 +155,17 @@ set(PROJECT_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/src/include")
 # Functions
 # -----------------------------------------------------------------------------
 function(hi_apply_common target)
-    target_include_directories(${target} PRIVATE
-        $<BUILD_INTERFACE:${PROJECT_INCLUDE_DIR}>
-    )
-
+    target_include_directories(${target} PRIVATE $<BUILD_INTERFACE:${PROJECT_INCLUDE_DIR}>)
     target_compile_definitions(${target} PRIVATE
         $<$<CONFIG:Release>:NDEBUG>
-
         # IO_HAS_STD when NOT freestanding
         $<$<NOT:${_GE_FREESTANDING}>:IO_HAS_STD=1>
     )
-
     # compiler-id common flags
     target_compile_options(${target} PRIVATE
         $<$<CXX_COMPILER_ID:MSVC>:${msvc_common_compile}>
         $<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>>:${unix_common_compile}>
     )
-
     # MSVC linker opts for all Release-like configs
     if(MSVC)
         target_link_options(${target} PRIVATE
@@ -195,12 +189,16 @@ function(hi_apply_freestanding target)
     if(MSVC)
         # 1) DO NOT select CRT runtime for freestanding
         #    (so CMake/MSVC won't inject /DEFAULTLIB:libcpmt/msvcrt)
-        set_property(TARGET ${target} PROPERTY MSVC_RUNTIME_LIBRARY "")
+        set_property(TARGET ${target} PROPERTY MSVC_RUNTIME_LIBRARY
+            $<$<NOT:${_GE_FREESTANDING}>:MultiThreaded$<$<CONFIG:Debug>:Debug>$<$<NOT:$<CONFIG:Debug>>:DLL>>
+            $<$<AND:${_GE_FREESTANDING},$<NOT:$<CONFIG:Debug>>>:MultiThreaded> # /MT
+        )
 
         # 2) No default libs at link time for freestanding configs
         target_link_options(${target} PRIVATE
-            $<$<AND:$<CXX_COMPILER_ID:MSVC>,${_GE_FREESTANDING}>:/NODEFAULTLIB>
+          $<$<AND:${_GE_FREESTANDING},$<CXX_COMPILER_ID:MSVC>>:/NODEFAULTLIB>
         )
+
 
         # 3) Keep only what you explicitly link (Win32 API libs etc.)
         target_link_libraries(${target} PRIVATE user32 gdi32 opengl32 kernel32 bcrypt ws2_32)
@@ -245,7 +243,7 @@ function(hi_apply_debug target)
     )
 endfunction()
 
-function(hi_no_console target)
+function(hi_console target)
     if(MSVC)
         target_link_options(${target} PRIVATE
             $<$<CONFIG:ReleaseNoConsole>:/SUBSYSTEM:WINDOWS>
@@ -254,6 +252,11 @@ function(hi_no_console target)
             $<$<CONFIG:ReleaseMiniNoConsole>:/ENTRY:WinMain>
         )
     endif()
+
+    # CONSOLE define only for configs where it set
+    target_compile_definitions(${name} PRIVATE
+        $<$<OR:$<CONFIG:Debug>,$<CONFIG:Release>,$<CONFIG:ReleaseMini>>:CONSOLE>
+    )
 endfunction()
 
 function(hi_add_header_only name)
@@ -273,12 +276,7 @@ function(hi_add_test_exe name)
     cmake_parse_arguments(T "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
     add_executable(${name} ${T_CPP} ${T_HEADERS})
-    hi_no_console(${name})
-
-    # CONSOLE define only for configs where it set
-    target_compile_definitions(${name} PRIVATE
-        $<$<OR:$<CONFIG:Debug>,$<CONFIG:Release>,$<CONFIG:ReleaseMini>>:CONSOLE>
-    )
+    hi_console(${name})
 
     if(T_LIBS)
         target_link_libraries(${name} PRIVATE ${T_LIBS})
@@ -306,6 +304,7 @@ function(hi_add_gui_exe name)
     hi_apply_common(${name})
     hi_apply_freestanding(${name})
     hi_apply_debug(${name})
+    hi_console(${name})
     # --- Windows: GUI subsystem for "no console" configs ---
     if(MSVC)
         target_link_options(${name} PRIVATE

@@ -8,6 +8,14 @@
 #   define IO_GL_API_CORE 460 // max version 4.6.0 by default
 #endif
 
+#ifndef assert
+#   ifdef _DEBUG
+#       include <assert.h>
+#   else
+#       define assert // empty macro to do nothing
+#   endif
+#endif
+
 // ------------------- OS-dependent Includes -------------------------
 #ifdef IO_IMPLEMENTATION
 #   if defined(_WIN32)

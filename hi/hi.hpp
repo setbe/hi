@@ -4,13 +4,16 @@
 
 #ifdef IO_IMPLEMENTATION
 #   if defined(_WIN32)
-#      ifndef WIN32_LEAN_AND_MEAN
-#          define WIN32_LEAN_AND_MEAN
-#      endif
-#      ifndef NOMINMAX
-#          define NOMINMAX
-#      endif
-#      include <Windows.h>
+#       ifndef WIN32_LEAN_AND_MEAN
+#           define WIN32_LEAN_AND_MEAN
+#       endif
+#       ifndef NOMINMAX
+#           define NOMINMAX
+#       endif
+#       include <Windows.h>
+#       ifdef DrawText
+#           undef DrawText
+#       endif
 #   elif defined(__linux__)
 #       include <X11/Xlib.h>
 #       include <X11/Xatom.h>
@@ -376,7 +379,7 @@ namespace native {
 
             inline bool PollEvents(IWindow& win) const noexcept;
         public:
-            inline void setTitle(const io::char_view title) const noexcept;
+            inline void setTitle(io::char_view title) const noexcept;
             inline void setShow(bool) const noexcept;
             inline void setFullscreen(bool) const noexcept;
             inline void setCursorVisible(bool) const noexcept;
@@ -475,7 +478,7 @@ namespace native {
             }
             return true;
         }
-        inline void Window::setTitle(const io::char_view title) const noexcept {
+        inline void Window::setTitle(io::char_view title) const noexcept {
             if (!title) return; // empty string
             ::io::wstring temp;
             if (!::io::native::utf8_to_wide(title, temp))
@@ -856,7 +859,7 @@ namespace glx {
         return true;
     }
 
-    inline void native::Window::setTitle(const io::char_view title) const noexcept {
+    inline void native::Window::setTitle(io::char_view title) const noexcept {
         if (!_dpy || !_xwnd || !title) return;
         if (!_dpy || !_xwnd || !title) return;
         const Atom utf8      = XInternAtom(_dpy, "UTF8_STRING", False);
@@ -916,9 +919,9 @@ namespace glx {
             HGLRC _hglrc{ nullptr };
 #   endif
 #endif // IO_IMPLEMENTATION
-        ::hi::IWindow* _win{};
-        io::u8 _req_core_major{3};
-        io::u8 _req_core_minor{3};
+            ::hi::IWindow* _win{};
+            io::u8 _req_core_major{3};
+            io::u8 _req_core_minor{3};
 
         public:
             Opengl() noexcept = default;
@@ -952,6 +955,18 @@ namespace glx {
             void setHglrc(HGLRC new_hglrc) noexcept { _hglrc = new_hglrc; }
 #   endif
 #endif // IO_IMPLEMENTATION
+
+            static inline bool gl_bootstrap_load() noexcept {
+                auto must = [](auto& out, const char* name) noexcept -> bool {
+                    using FnT = decltype(out);
+                    void* p = ::gl::loader(name);
+                    out = reinterpret_cast<FnT>(p);
+                    return out != nullptr;
+                };
+                return must(gl::native::pGetError, "glGetError") &&
+                    must(gl::native::pGetString, "glGetString") &&
+                    must(gl::native::pGetIntegerv, "glGetIntegerv");
+            }
         }; // struct OpenglContext
 
 #if defined(IO_IMPLEMENTATION) && defined(_WIN32)
@@ -1181,36 +1196,25 @@ namespace glx {
                 if (!wglGetCurrentDC())      return AboutError::w_GetCurrentDC;
 
                 win.opengl().setHglrc(ctx);
-                const io::u8 major = win.opengl().currentMajorVersion();
-                const io::u8 minor = win.opengl().currentMinorVersion();
+
                 gl::loader = OpenglLoader;
                 // 1) minimal load for querying version
-                // NOTE: GetIntegerv itself must be loadable; easiest: call load_core(2,0) first,
-                // but load_core currently requires GetIntegerv -> circular.
-                // So: load GetIntegerv+GetError+GetString manually, then query, then load full.
-                {
-                    auto must = [](auto& out, const char* name) noexcept -> bool {
-                        using FnT = decltype(out);
-                        void* p = ::gl::loader(name);
-                        out = reinterpret_cast<FnT>(p);
-                        return out != nullptr;
-                    };
-                    if (!must(gl::native::pGetError, "glGetError")) return AboutError::MissingRequiredOpenglFunction;
-                    if (!must(gl::native::pGetString, "glGetString")) return AboutError::MissingRequiredOpenglFunction;
-                    if (!must(gl::native::pGetIntegerv, "glGetIntegerv")) return AboutError::MissingRequiredOpenglFunction;
-                    gl::loaded = true; // allow calling wrappers
-                }
+                gl::loaded = true;
+                if(!Opengl::gl_bootstrap_load()) return AboutError::MissingRequiredOpenglFunction;
             
                 int real_maj=0, real_min=0;
                 gl::query_core_version(real_maj, real_min);
                 if (real_maj <= 0) return AboutError::MissingRequiredOpenglFunction;
             
+                // Doesn't check if real >= req, we should catch nullptrs on `gl::load_core`
+
                 // 2) now load full table based on real core version
                 gl::loaded = false;
                 auto miss = gl::load_core(real_maj, real_min);
                 if (!miss.empty()) return AboutError::MissingRequiredOpenglFunction;
+                gl::loaded = true;
 
-                _win->setApiAlive(RendererApi::Opengl, true);
+                win.setApiAlive(RendererApi::Opengl, true);
 
                 return AboutError::None;
             } // CreateModernContext
@@ -1220,6 +1224,7 @@ namespace glx {
     //                          namespace hi::native::*
     // ========================================================================
         IO_NODISCARD AboutError Opengl::CreateContext(IWindow& win) noexcept {
+            _win = &win;
             DummyWindow dummy{};
 
             wgl::PFNWGLCHOOSEPIXELFORMATARBPROC    choose{ nullptr };
@@ -1230,6 +1235,7 @@ namespace glx {
             return wgl::CreateModernContext(win, choose, create);
         }
         Opengl::~Opengl() noexcept {
+            _win->setApiAlive(RendererApi::None, false);
             HGLRC ctx = reinterpret_cast<HGLRC>(_hglrc);
             // Unbind context from any HDC (just in case it's current)
             if (wglGetCurrentContext() == _hglrc) wglMakeCurrent(nullptr, nullptr);
@@ -1249,17 +1255,6 @@ namespace glx {
     static inline PFN_glXCreateContextAttribsARB get_create_attribs() noexcept {
         return (PFN_glXCreateContextAttribsARB)glXGetProcAddressARB((const GLubyte*)"glXCreateContextAttribsARB");
     }
-    static inline bool gl_bootstrap_load() noexcept {
-        auto must = [](auto& out, const char* name) noexcept -> bool {
-            using FnT = decltype(out);
-            void* p = ::gl::loader(name);
-            out = reinterpret_cast<FnT>(p);
-            return out != nullptr;
-        };
-        return must(gl::native::pGetError,   "glGetError") &&
-               must(gl::native::pGetString,  "glGetString") &&
-               must(gl::native::pGetIntegerv,"glGetIntegerv");
-    }
 } // namespace glx
 
     IO_NODISCARD AboutError native::Opengl::CreateContext(IWindow& win) noexcept {
@@ -1273,7 +1268,7 @@ namespace glx {
         glx::PFN_glXCreateContextAttribsARB create_attribs = glx::get_create_attribs();
         if (!create_attribs) return AboutError::MissingCreateContextAttribsARB;
 
-        // Prefer 3.3, then 3.1, then 3.0, then 2.1 (compat not requested here)
+        // Prefer 3.3, then 3.1, then 3.0 (compat not requested here)
         struct { int maj, min; } tries[] = { {4,1},{4,0},{3,3},{3,2},{3,1},{3,0} };
 
         for (auto t : tries) {
@@ -1296,7 +1291,7 @@ namespace glx {
 
             // bootstrap for version query
             gl::loaded = true;
-            if (!glx::gl_bootstrap_load()) {
+            if (!Opengl::gl_bootstrap_load()) {
                 glXDestroyContext(dpy, ctx);
                 continue;
             }
@@ -1318,7 +1313,7 @@ namespace glx {
                 glXDestroyContext(dpy, ctx);
                 continue;
             }
-
+            gl::loaded = true;
             _ctx = ctx;
             _win->setApiAlive(RendererApi::Opengl, true);
             return AboutError::None;
@@ -1451,12 +1446,7 @@ namespace glx {
     }
 
     static inline io::u32 pack_rgba8(float r,float g,float b,float a) noexcept {
-        auto clamp01 = [](float x)->float { return x<0.f?0.f:(x>1.f?1.f:x); };
-        r = clamp01(r); g = clamp01(g); b = clamp01(b); a = clamp01(a);
-        const io::u32 R = (io::u32)(r*255.f + 0.5f);
-        const io::u32 G = (io::u32)(g*255.f + 0.5f);
-        const io::u32 B = (io::u32)(b*255.f + 0.5f);
-        const io::u32 A = (io::u32)(a*255.f + 0.5f);
+        io::u32 R = io::f2u8(r), G = io::f2u8(g), B = io::f2u8(b), A = io::f2u8(a);
         return (A<<24) | (B<<16) | (G<<8) | (R<<0); // little-endian packed
     }
 
@@ -1566,6 +1556,38 @@ namespace glx {
         void* map_mem{};
     };
 
+    struct planned_glyph {
+        io::u32 codepoint;
+        io::u16 glyph_index;
+        stbtt_stream::GlyphRect rect; // atlas px
+        int x_min, y_min, x_max, y_max; // font units
+        int advance; // font units
+        int lsb;     // font units
+    };
+
+    struct planned_font_atlas {
+        hi::FontAtlasMode mode{};
+        io::u16 pixel_height{};
+        float spread_px{};
+
+        float scale{};
+        float spread_fu{};
+        io::u16 atlas_side{};
+        io::u32 glyph_count{};
+
+        io::u8* atlas_cpu{};
+        io::u32 comp{};
+        io::u32 stride{};
+
+        planned_glyph* glyphs{}; // alloc, glyph_count
+    };
+
+    static inline void planned_destroy(planned_font_atlas& p) noexcept {
+        if (p.atlas_cpu) io::free(p.atlas_cpu);
+        if (p.glyphs) io::free(p.glyphs);
+        p = {};
+    }
+
     struct text_vertex {
         float x, y;
         float u, v;
@@ -1594,115 +1616,114 @@ namespace glx {
             "}\n";
 
     static const char* k_text_fs_sdf_330 =
-"#version 330 core\n"
-"in vec2 vUV;\n"
-"in vec4 vColor;\n"
-"in vec4 vOutline;\n"
-"in vec2 vParams; // outline_px, softness_px\n"
-"out vec4 Frag;\n"
-"uniform sampler2D uTex;\n"
-"uniform float uPxRange;     // spread_px\n"
-"uniform float uAtlasSide;   // atlas_side\n"
-"uniform int   uInvert;      // 0/1\n"
-"\n"
-"float screenPxRange(){\n"
-"  vec2 duv = fwidth(vUV);\n"
-"  vec2 texPerPix = duv * uAtlasSide;\n"
-"  float tpp = max(texPerPix.x, texPerPix.y);\n"
-"  return uPxRange / max(tpp, 1e-6);\n"
-"}\n"
-"\n"
-"void main(){\n"
-"  float pxr = screenPxRange();\n"
-"  float sd  = texture(uTex, vUV).r - 0.5;\n"
-"  if (uInvert != 0) sd = -sd;\n"
-"  float dist = sd * pxr;\n"
-"\n"
-"  float w = max(fwidth(dist), vParams.y);\n"
-"  float a_fill = smoothstep(-w, +w, dist);\n"
-"  vec4 fill = vec4(vColor.rgb, vColor.a) * a_fill;\n"
-"\n"
-"  if (vOutline.a > 0.0 && vParams.x > 0.0) {\n"
-"    float o = vParams.x;\n"
-"    float a_out = smoothstep(-o-w, -o+w, dist) - smoothstep(-w, +w, dist);\n"
-"    a_out = clamp(a_out, 0.0, 1.0);\n"
-"    vec4 outc = vec4(vOutline.rgb, vOutline.a) * a_out;\n"
-"    Frag = outc + fill * (1.0 - outc.a);\n"
-"  } else {\n"
-"    Frag = fill;\n"
-"  }\n"
-"}\n";
+        "#version 330 core\n"
+        "in vec2 vUV;\n"
+        "in vec4 vColor;\n"
+        "in vec4 vOutline;\n"
+        "in vec2 vParams; // outline_px, softness_px\n"
+        "out vec4 Frag;\n"
+        "uniform sampler2D uTex;\n"
+        "uniform float uPxRange;     // spread_px\n"
+        "uniform float uAtlasSide;   // atlas_side\n"
+        "uniform int   uInvert;      // 0/1\n"
+        "\n"
+        "float screenPxRange(){\n"
+        "  vec2 duv = fwidth(vUV);\n"
+        "  vec2 texPerPix = duv * uAtlasSide;\n"
+        "  float tpp = max(texPerPix.x, texPerPix.y);\n"
+        "  return uPxRange / max(tpp, 1e-6);\n"
+        "}\n"
+        "\n"
+        "void main(){\n"
+        "  float pxr = screenPxRange();\n"
+        "  float sd  = texture(uTex, vUV).r * 2.0 - 1.0;\n"
+        "  if (uInvert != 0) sd = -sd;\n"
+        "  float dist = sd * pxr;\n"
+        "\n"
+        "  float w = max(fwidth(dist), vParams.y);\n"
+        "  float a_fill = smoothstep(-w, +w, dist);\n"
+        "  vec4 fill = vec4(vColor.rgb, vColor.a) * a_fill;\n"
+        "\n"
+        "  if (vOutline.a > 0.0 && vParams.x > 0.0) {\n"
+        "    float o = vParams.x;\n"
+        "    float a_out = smoothstep(-o-w, -o+w, dist) - smoothstep(-w, +w, dist);\n"
+        "    a_out = clamp(a_out, 0.0, 1.0);\n"
+        "    vec4 outc = vec4(vOutline.rgb, vOutline.a) * a_out;\n"
+        "    Frag = outc + fill * (1.0 - outc.a);\n"
+        "  } else {\n"
+        "    Frag = fill;\n"
+        "  }\n"
+        "}\n";
 
 
     static const char* k_text_fs_mtsdf_330 =
-"#version 330 core\n"
-"in vec2 vUV;\n"
-"in vec4 vColor;\n"
-"in vec4 vOutline;\n"
-"in vec2 vParams; // outline_px, softness_px\n"
-"out vec4 Frag;\n"
-"uniform sampler2D uTex;\n"
-"uniform float uPxRange;     // spread_px\n"
-"uniform float uAtlasSide;   // atlas_side\n"
-"uniform int   uInvert;      // 0/1\n"
-"\n"
-"float screenPxRange(){\n"
-"  vec2 duv = fwidth(vUV);\n"
-"  vec2 texPerPix = duv * uAtlasSide;\n"
-"  float tpp = max(texPerPix.x, texPerPix.y);\n"
-"  return uPxRange / max(tpp, 1e-6);\n"
-"}\n"
-"\n"
-"float median3(float a,float b,float c){ return max(min(a,b), min(max(a,b),c)); }\n"
-"\n"
-"void main(){\n"
-"  vec4 t = texture(uTex, vUV);\n"
-"\n"
-"  float ms = median3(t.r, t.g, t.b) - 0.5;\n"
-"  float ss  = t.a - 0.5;   // signed nd\n"
-"  if (uInvert != 0) { ms = -ms; ss = -ss; }\n"
-"\n"
-"  // Choose nearer-to-edge estimate (smaller |q| == smaller |d|)\n"
-"  float s = ss;\n"
-"\n"
-"  float pxr = screenPxRange();\n"
-"  float dist = s * pxr;\n"
-"\n"
-"  float w = max(fwidth(dist), vParams.y);\n"
-"  float a_fill = smoothstep(-w, +w, dist);\n"
-"  vec4 fill = vec4(vColor.rgb, vColor.a) * a_fill;\n"
-"\n"
-"  if (vOutline.a > 0.0 && vParams.x > 0.0) {\n"
-"    float o = vParams.x;\n"
-"    float a_out = smoothstep(-o-w, -o+w, dist) - smoothstep(-w, +w, dist);\n"
-"    a_out = clamp(a_out, 0.0, 1.0);\n"
-"    vec4 outc = vec4(vOutline.rgb, vOutline.a) * a_out;\n"
-"    Frag = outc + fill * (1.0 - outc.a);\n"
-"  } else {\n"
-"    Frag = fill;\n"
-"  }\n"
-"}\n";
+        "#version 330 core\n"
+        "in vec2 vUV;\n"
+        "in vec4 vColor;\n"
+        "in vec4 vOutline;\n"
+        "in vec2 vParams; // outline_px, softness_px\n"
+        "out vec4 Frag;\n"
+        "uniform sampler2D uTex;\n"
+        "uniform float uPxRange;     // spread_px\n"
+        "uniform float uAtlasSide;   // atlas_side\n"
+        "uniform int   uInvert;      // 0/1\n"
+        "\n"
+        "float screenPxRange(){\n"
+        "  vec2 duv = fwidth(vUV);\n"
+        "  vec2 texPerPix = duv * uAtlasSide;\n"
+        "  float tpp = max(texPerPix.x, texPerPix.y);\n"
+        "  return uPxRange / max(tpp, 1e-6);\n"
+        "}\n"
+        "\n"
+        "float median3(float a,float b,float c){ return max(min(a,b), min(max(a,b),c)); }\n"
+        "\n"
+        "void main(){\n"
+        "  vec4 t = texture(uTex, vUV);\n"
+        "\n"
+        "  float ms = median3(t.r, t.g, t.b) * 2.0 - 1.0;\n"
+        "  float ss = t.a * 2.0 - 1.0;\n"
+        "  if (uInvert != 0) { ms = -ms; ss = -ss; }\n"
+        "\n"
+        "  float s = ss;\n"
+        "\n"
+        "  float pxr = screenPxRange();\n"
+        "  float dist = s * pxr;\n"
+        "\n"
+        "  float w = max(fwidth(dist), vParams.y);\n"
+        "  float a_fill = smoothstep(-w, +w, dist);\n"
+        "  vec4 fill = vec4(vColor.rgb, vColor.a) * a_fill;\n"
+        "\n"
+        "  if (vOutline.a > 0.0 && vParams.x > 0.0) {\n"
+        "    float o = vParams.x;\n"
+        "    float a_out = smoothstep(-o-w, -o+w, dist) - smoothstep(-w, +w, dist);\n"
+        "    a_out = clamp(a_out, 0.0, 1.0);\n"
+        "    vec4 outc = vec4(vOutline.rgb, vOutline.a) * a_out;\n"
+        "    Frag = outc + fill * (1.0 - outc.a);\n"
+        "  } else {\n"
+        "    Frag = fill;\n"
+        "  }\n"
+        "}\n";
 
 // Show R component as grayscale (works for R8, RGBA8)
 static const char* k_text_fs_debug_r_330 =
-"#version 330 core\n"
-"in vec2 vUV;\n"
-"out vec4 Frag;\n"
-"uniform sampler2D uTex;\n"
-"void main(){\n"
-"  float r = texture(uTex, vUV).r;\n"
-"  Frag = vec4(r, r, r, 1.0);\n"
-"}\n";
+            "#version 330 core\n"
+            "in vec2 vUV;\n"
+            "out vec4 Frag;\n"
+            "uniform sampler2D uTex;\n"
+            "void main(){\n"
+            "  float r = texture(uTex, vUV).r;\n"
+            "  Frag = vec4(r, r, r, 1.0);\n"
+            "}\n";
 
 // Show RGBA directly
 static const char* k_text_fs_debug_rgba_330 =
-"#version 330 core\n"
-"in vec2 vUV;\n"
-"out vec4 Frag;\n"
-"uniform sampler2D uTex;\n"
-"void main(){\n"
-"  Frag = texture(uTex, vUV);\n"
-"}\n";
+            "#version 330 core\n"
+            "in vec2 vUV;\n"
+            "out vec4 Frag;\n"
+            "uniform sampler2D uTex;\n"
+            "void main(){\n"
+            "  Frag = texture(uTex, vUV);\n"
+            "}\n";
 
     static inline void push_glyph_quad(io::vector<text_vertex>& v,
                                        const font_atlas& a,
@@ -1837,22 +1858,11 @@ static const char* k_text_fs_debug_rgba_330 =
         }
         inline void Render() noexcept override;
         inline void SwapBuffers() const noexcept;
-        void Quit() const noexcept {
-#ifdef IO_IMPLEMENTATION
-#   ifdef _WIN32
-               PostMessageW(reinterpret_cast<HWND>(native().getHwnd()), WM_QUIT, 0, 0);
-#   else
-#               // simplest: close via XDestroyWindow ->
-                //   PollEvents returns false once ClientMessage/DestroyNotify
-                // or just set a flag in your app loop.
-#   endif
-#endif // IO_IMPLEMENTATION
-        }
 
         // ---- Font files (paths only) ----
         FontId LoadFont(io::char_view ttf_path) noexcept; // stores path, checks file exists
-        // ---- Build atlas (loads TTF bytes, plans, builds, uploads texture) ----
-        AtlasId GenerateFontAtlas(FontId font, const FontAtlasDesc& desc) noexcept;
+        // ---- Plan/Build atlas (load TTF bytes, plan, build, upload texture) ----
+        AtlasId GenerateFontAtlas(FontId font_id, const hi::FontAtlasDesc& desc) noexcept;
         // ---- Immediate text ----
         void DrawText(const TextDraw& d) noexcept;
         // Call once per frame inside Render() (or end of Render())
@@ -1860,12 +1870,12 @@ static const char* k_text_fs_debug_rgba_330 =
 
         // --- Setters ---
         inline void setShow(bool value) const noexcept { native().setShow(value); }
-        inline void setTitle(const io::char_view new_title) const noexcept { native().setTitle(new_title); }
+        inline void setTitle(io::char_view new_title) const noexcept { native().setTitle(new_title); }
         inline void setFullscreen(bool value) const noexcept { native().setFullscreen(value); }
         inline void setCursorVisible(bool value) const noexcept { native().setCursorVisible(value); }
         void setGlCore(io::u8 major, io::u8 minor) noexcept;
 
-        inline io::u16 getAtlasSide(AtlasId id) const noexcept { return (id<0) ? 0 : (id>=_atlases.size()) ? 0 : _atlases[id].atlas_side;   }
+        inline io::u16 getAtlasSide(AtlasId id) const noexcept { return (id<0) ? 0 : (id>=(int)_atlases.size()) ? 0 : _atlases[id].atlas_side;   }
 
     private:
         native::Window _native_window;
@@ -1886,32 +1896,6 @@ static const char* k_text_fs_debug_rgba_330 =
             
         io::vector<text_vertex> _text_verts;
         io::vector<text_cmd>    _text_cmds;
-
-        static io::u32 gl_upload_atlas(io::u16 side, hi::FontAtlasMode mode, const io::u8* pixels) noexcept {
-            const int level = 0;
-            const int w = (int)side;
-            const int h = (int)side;
-            const bool is_r = (mode==hi::FontAtlasMode::SDF) || (mode==hi::FontAtlasMode::DebugR);
-            const gl::TexFormat fmt = is_r ? gl::TexFormat::R : gl::TexFormat::RGBA;
-            const gl::InternalFormat int_fmt = is_r ? gl::InternalFormat::R8 : gl::InternalFormat::RGBA8;
-            
-            io::u32 tex=0;
-            gl::GenTextures(1, &tex);
-            gl::BindTexture(gl::TexTarget::Tex2D, tex);
-
-            gl::TexParameteri(gl::TexTarget::Tex2D, gl::TexParam::MinFilter,  gl::MinifyingFilter::Linear);
-            gl::TexParameteri(gl::TexTarget::Tex2D, gl::TexParam::MagFilter, gl::MagnifyingFilter::Linear);
-            gl::TexParameteri(gl::TexTarget::Tex2D, gl::TexParam::WrapS, gl::TexWrap::ClampToEdge);
-            gl::TexParameteri(gl::TexTarget::Tex2D, gl::TexParam::WrapT, gl::TexWrap::ClampToEdge);
-    
-            if (is_r) gl::PixelStorei(gl::UNPACK_ALIGNMENT, 1);
-            gl::TexImage2D(gl::TexTarget::Tex2D, level, int_fmt, w, h, 0, fmt, gl::DataType::UnsignedByte, pixels);
-            if (is_r) gl::PixelStorei(gl::UNPACK_ALIGNMENT, 4);
-            
-            gl::BindTexture(gl::TexTarget::Tex2D, 0);
-            
-            return tex;
-        }
     }; // struct Window
 
 
@@ -2000,125 +1984,7 @@ static const char* k_text_fs_debug_rgba_330 =
         return (FontId)(_font_paths.size() - 1);
     }
 
-    template <typename Derived>
-    AtlasId Window<Derived>::GenerateFontAtlas(FontId font_id, const hi::FontAtlasDesc& desc) noexcept {
-        if (font_id < 0 || (io::u32)font_id >= _font_paths.size()) return -1;
-        if (!desc.codepoints || desc.codepoint_count == 0) return -1;
-
-        // ---- 1) load TTF into RAM ----
-        io::string ttf_bytes{};
-        {
-            fs::File f(_font_paths[(io::u32)font_id], io::OpenMode::Read);
-            if (!f.is_open() || !f.read_all(ttf_bytes) || ttf_bytes.empty()) return -1;
-        }
-        stbtt_stream::Font font;
-        if (!font.ReadBytes(reinterpret_cast<uint8_t*>(ttf_bytes.data()))) return -1;
-
-        // ---- 2) PlanBytes + Plan ----
-        stbtt_stream::PlanInput in{};
-        const bool want_sdf  = (desc.mode==hi::FontAtlasMode::SDF)    || (desc.mode==hi::FontAtlasMode::DebugR);
-        const bool want_mtsdf= (desc.mode==hi::FontAtlasMode::MTSDF)  || (desc.mode==hi::FontAtlasMode::DebugRGBA);
-        in.mode         = want_sdf ? stbtt_stream::DfMode::SDF : stbtt_stream::DfMode::MTSDF;
-        in.pixel_height = desc.pixel_height;
-        in.spread_px    = desc.spread_px;
-        in.codepoints   = desc.codepoints;
-        in.codepoint_count = desc.codepoint_count;
-
-        const size_t plan_bytes = font.PlanBytes(in);  if (plan_bytes == 0) return -1;
-        void* plan_mem = io::alloc(plan_bytes);        if (!plan_mem) return -1;
-
-        stbtt_stream::FontPlan plan{};
-        if (!font.Plan(in, plan_mem, plan_bytes, plan)) { io::free(plan_mem); return -1; }
-
-        // ---- 3) allocate atlas CPU ----
-        const io::u32 side = plan.atlas_side;
-        const io::u32 comp = want_sdf ? 1u : 4u;
-        const io::u32 stride = side * comp;
-        const size_t atlas_bytes = (size_t)side * (size_t)side * (size_t)comp;
-
-        io::u8* atlas_cpu = (io::u8*)io::alloc(atlas_bytes);
-        if (!atlas_cpu) { io::free(plan_mem); return -1; }
-        for (size_t i=0;i<atlas_bytes;++i) atlas_cpu[i]=255;
-
-        if (!font.Build(plan, atlas_cpu, stride)) {
-            io::free(atlas_cpu);
-            io::free(plan_mem);
-            return -1;
-        }
-
-        // ---- 4) build atlas object ----
-        font_atlas A{};
-        A.mode         = desc.mode;
-        A.pixel_height = desc.pixel_height;
-        A.spread_px    = desc.spread_px;
-        A.scale        = plan.scale;
-        A.spread_fu    = plan.spread_fu;
-        A.atlas_side   = plan.atlas_side;
-        A.glyph_count  = plan.glyph_count;
-
-        // ---- 5) GPU upload ----
-        A.tex = gl_upload_atlas((io::u16)side, desc.mode, atlas_cpu);
-
-        // ---- 6) shaders + vao/vbo ----
-        A.prog = build_text_program(desc.mode);
-        if (!A.prog) {
-            // cleanup
-            if (A.tex) gl::DeleteTextures(1, &A.tex);
-            io::free(atlas_cpu);
-            io::free(plan_mem);
-            return -1;
-        }
-        setup_text_vao(A.vao, A.vbo);
-
-        // ---- 7) glyph table + hashmap ----
-        A.glyphs.reserve(plan.glyph_count);
-
-        // allocate map slots inside one OS block (pow2 >= 2x glyph_count)
-        io::u32 cap = 1;
-        while (cap < plan.glyph_count * 2u) cap <<= 1u;
-        void* map_mem = io::alloc((size_t)cap * sizeof(glyph_map::slot));
-        if (!map_mem || !A.map.init(map_mem, cap)) {
-            // cleanup
-            if (A.vao) gl::DeleteVertexArrays(1, &A.vao);
-            if (A.vbo) gl::DeleteBuffers(1, &A.vbo);
-            if (A.prog) gl::DeleteProgram(A.prog);
-            if (A.tex) gl::DeleteTextures(1, &A.tex);
-            io::free(map_mem);
-            io::free(atlas_cpu);
-            io::free(plan_mem);
-            return -1;
-        }
-
-        // plan._glyphs points inside plan_mem; use it NOW (before free)
-        const stbtt_stream::GlyphPlan* gps = plan._glyphs;
-
-        for (io::u32 i=0; i<plan.glyph_count; ++i) {
-            const auto& gp = gps[i];
-            font_atlas::glyph G{};
-            G.codepoint   = gp.codepoint;
-            G.glyph_index = gp.glyph_index;
-            G.rect        = gp.rect;
-            G.x_min = gp.x_min;
-            G.y_min = gp.y_min;
-            G.x_max = gp.x_max;
-            G.y_max = gp.y_max;
-
-            const auto hm = font.GetGlyphHorMetrics((int)gp.glyph_index);
-            G.advance = hm.advance;
-            G.lsb     = hm.lsb;
-
-            const io::u32 idx = (io::u32)A.glyphs.size();
-            A.glyphs.push_back(G);
-            (void)A.map.insert(G.codepoint, idx);
-        }
-
-        // ---- 8) done; free CPU temporaries that are no longer needed ----
-        io::free(atlas_cpu);
-        io::free(plan_mem);
-
-        _atlases.push_back(io::move(A)); // Change owner
-        return (AtlasId)(_atlases.size() - 1);
-    }
+    
 
     template<typename Derived>
     void Window<Derived>::DrawText(const TextDraw& d) noexcept {
@@ -2214,4 +2080,173 @@ static const char* k_text_fs_debug_rgba_330 =
         _text_verts.clear();
     }
 
+    IO_NODISCARD static bool plan_font(io::char_view ttf_path, const hi::FontAtlasDesc& desc, planned_font_atlas& out) noexcept {
+        out = {};
+        if (!desc.codepoints || desc.codepoint_count == 0) return false;
+
+        io::string ttf_bytes{};
+        {
+            fs::File f(ttf_path, io::OpenMode::Read);
+            if (!f.is_open() || !f.read_all(ttf_bytes) || ttf_bytes.empty()) return false;
+        }
+
+        stbtt_stream::Font font;
+        if (!font.ReadBytes(reinterpret_cast<uint8_t*>(ttf_bytes.data()))) return false;
+
+        stbtt_stream::PlanInput in{};
+        const bool want_sdf = (desc.mode == hi::FontAtlasMode::SDF) || (desc.mode == hi::FontAtlasMode::DebugR);
+        in.mode = want_sdf ? stbtt_stream::DfMode::SDF : stbtt_stream::DfMode::MTSDF;
+        in.pixel_height = desc.pixel_height;
+        in.spread_px = desc.spread_px;
+        in.codepoints = desc.codepoints;
+        in.codepoint_count = desc.codepoint_count;
+
+        const size_t plan_bytes = font.PlanBytes(in);
+        if (!plan_bytes) return false;
+
+        void* plan_mem = io::alloc(plan_bytes);
+        if (!plan_mem) return false;
+
+        stbtt_stream::FontPlan plan{};
+        if (!font.Plan(in, plan_mem, plan_bytes, plan)) { io::free(plan_mem); return false; }
+
+        // ---- copy glyphs + metrics ----
+        planned_glyph* glyphs = (planned_glyph*)io::alloc((size_t)plan.glyph_count * sizeof(planned_glyph));
+        if (!glyphs) { io::free(plan_mem); return false; }
+
+        for (io::u32 i = 0; i < plan.glyph_count; ++i) {
+            const auto& gp = plan._glyphs[i];
+            planned_glyph pg{};
+            pg.codepoint = gp.codepoint;
+            pg.glyph_index = gp.glyph_index;
+            pg.rect = gp.rect;
+            pg.x_min = gp.x_min; pg.y_min = gp.y_min;
+            pg.x_max = gp.x_max; pg.y_max = gp.y_max;
+
+            const auto hm = font.GetGlyphHorMetrics((int)gp.glyph_index);
+            pg.advance = hm.advance;
+            pg.lsb = hm.lsb;
+
+            glyphs[i] = pg;
+        }
+
+        // ---- CPU atlas ----
+        const io::u32 side = plan.atlas_side;
+        const io::u32 comp = want_sdf ? 1u : 4u;
+        const io::u32 stride = side * comp;
+        const size_t atlas_bytes = (size_t)side * (size_t)side * (size_t)comp;
+
+        io::u8* atlas_cpu = (io::u8*)io::alloc(atlas_bytes);
+        if (!atlas_cpu) { io::free(glyphs); io::free(plan_mem); return false; }
+        for (size_t i = 0; i < atlas_bytes; ++i) atlas_cpu[i] = 255;
+
+        if (!font.Build(plan, atlas_cpu, stride)) {
+            io::free(atlas_cpu);
+            io::free(glyphs);
+            io::free(plan_mem);
+            return false;
+        }
+
+        io::free(plan_mem);
+
+        out.mode = desc.mode;
+        out.pixel_height = desc.pixel_height;
+        out.spread_px = desc.spread_px;
+        out.scale = plan.scale;
+        out.spread_fu = plan.spread_fu;
+        out.atlas_side = plan.atlas_side;
+        out.glyph_count = plan.glyph_count;
+        out.atlas_cpu = atlas_cpu;
+        out.comp = comp;
+        out.stride = stride;
+        out.glyphs = glyphs;
+        return true;
+    }
+    
+    IO_NODISCARD static inline io::u32 gl_upload_atlas(io::u16 side, hi::FontAtlasMode mode, const io::u8* pixels) noexcept {
+        const int level = 0;
+        const int w = (int)side;
+        const int h = (int)side;
+        const bool is_r = (mode == hi::FontAtlasMode::SDF) || (mode == hi::FontAtlasMode::DebugR);
+        const gl::TexFormat fmt = is_r ? gl::TexFormat::R : gl::TexFormat::RGBA;
+        const gl::InternalFormat int_fmt = is_r ? gl::InternalFormat::R8 : gl::InternalFormat::RGBA8;
+
+        io::u32 tex = 0;
+        gl::GenTextures(1, &tex);
+        gl::BindTexture(gl::TexTarget::Tex2D, tex);
+
+        gl::TexParameteri(gl::TexTarget::Tex2D, gl::TexParam::MinFilter, gl::MinifyingFilter::Linear);
+        gl::TexParameteri(gl::TexTarget::Tex2D, gl::TexParam::MagFilter, gl::MagnifyingFilter::Linear);
+        gl::TexParameteri(gl::TexTarget::Tex2D, gl::TexParam::WrapS, gl::TexWrap::ClampToEdge);
+        gl::TexParameteri(gl::TexTarget::Tex2D, gl::TexParam::WrapT, gl::TexWrap::ClampToEdge);
+
+        if (is_r) gl::PixelStorei(gl::UNPACK_ALIGNMENT, 1);
+        gl::TexImage2D(gl::TexTarget::Tex2D, level, int_fmt, w, h, 0, fmt, gl::DataType::UnsignedByte, pixels);
+        if (is_r) gl::PixelStorei(gl::UNPACK_ALIGNMENT, 4);
+
+        gl::BindTexture(gl::TexTarget::Tex2D, 0);
+
+        return tex;
+    }
+
+    IO_NODISCARD static inline AtlasId gen_font_atlas(io::vector<hi::font_atlas>& atlases, const planned_font_atlas& p) noexcept {
+        hi::font_atlas A{};
+        A.mode = p.mode;
+        A.pixel_height = p.pixel_height;
+        A.spread_px = p.spread_px;
+        A.scale = p.scale;
+        A.spread_fu = p.spread_fu;
+        A.atlas_side = p.atlas_side;
+        A.glyph_count = p.glyph_count;
+
+        A.tex = gl_upload_atlas(p.atlas_side, p.mode, p.atlas_cpu);
+
+        if (!A.glyphs.reserve(p.glyph_count)) { if (A.tex) gl::DeleteTextures(1, &A.tex); return -1; }
+        A.prog = build_text_program(p.mode);
+        if (!A.prog) { if (A.tex) gl::DeleteTextures(1, &A.tex); return -1; }
+        setup_text_vao(A.vao, A.vbo);
+
+        io::u32 cap = 1;
+        while (cap < p.glyph_count * 2u) cap <<= 1u;
+        void* map_mem = io::alloc((size_t)cap * sizeof(glyph_map::slot));
+        if (!map_mem || !A.map.init(map_mem, cap)) {
+            if (A.vao) gl::DeleteVertexArrays(1, &A.vao);
+            if (A.vbo) gl::DeleteBuffers(1, &A.vbo);
+            if (A.prog) gl::DeleteProgram(A.prog);
+            if (A.tex) gl::DeleteTextures(1, &A.tex);
+            io::free(map_mem);
+            return -1;
+        }
+
+        for (io::u32 i = 0; i < p.glyph_count; ++i) {
+            const planned_glyph& pg = p.glyphs[i];
+            hi::font_atlas::glyph G{};
+            G.codepoint = pg.codepoint;
+            G.glyph_index = pg.glyph_index;
+            G.rect = pg.rect;
+            G.x_min = pg.x_min; G.y_min = pg.y_min;
+            G.x_max = pg.x_max; G.y_max = pg.y_max;
+            G.advance = pg.advance;
+            G.lsb = pg.lsb;
+
+            io::u32 idx = (io::u32)A.glyphs.size();
+            A.glyphs.push_back(G);
+            (void)A.map.insert(G.codepoint, idx);
+        }
+
+        if (!atlases.push_back(io::move(A))) return -1;
+        return (AtlasId)(atlases.size() - 1);
+    }
+
+    template <typename Derived>
+    AtlasId Window<Derived>::GenerateFontAtlas(FontId font_id, const hi::FontAtlasDesc& desc) noexcept {
+        if (font_id < 0 || (io::u32)font_id >= _font_paths.size()) return -1;
+
+        planned_font_atlas p{};
+        if (!plan_font(_font_paths[(io::u32)font_id].as_view(), desc, p)) return -1;
+
+        AtlasId id = gen_font_atlas(_atlases, p);
+        planned_destroy(p);
+        return id;
+    }
 } // namespace hi
