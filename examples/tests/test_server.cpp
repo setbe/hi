@@ -79,6 +79,16 @@ static std::vector<u8> make_disconnect(u32 sid, DisconnectReason r,
         (const u8*)&d, (u16)sizeof(d));
 }
 
+static bool send_all(Socket& s, Endpoint to, const u8* p, int n, u64 timeout_ms) {
+    const u64 start = monotonic_ms();
+    for (;;) {
+        const int sent = s.send_to(to, p, n);
+        if (sent == n) return true;
+        if (!(s.error() == Error::WouldBlock || s.error() == Error::Again)) return false;
+        if (monotonic_ms() - start >= timeout_ms) return false;
+        io::sleep_ms(1);
+    }
+}
 
 static void spin_sleep_ms(int ms) {
     // simple sleep wrapper (use std::this_thread::sleep_for in hosted tests)
@@ -125,32 +135,33 @@ TEST_CASE("server drops malformed packets and never establishes", "[udp][fuzz]")
     to.addr_be = IP::from_string("127.0.0.1");
     to.port_be = io::h2ns(test_socket::SERVER_PORT);
 
+    constexpr io::u64 TIMEOUT_MS = 100;
     // 1) too short
     {
         u8 tiny[8]{};
-        REQUIRE(atk.send_to(to, tiny, 8) == 8);
+        REQUIRE(send_all(atk, to, tiny, 8, TIMEOUT_MS));
     }
 
     // 2) bad magic
     {
-        auto d = make_datagram(0xDEADBEEFu, UDP_VERSION, MSG_HELLO, (u8)UdpChan::Unreliable,
-            1, 0, 0, nullptr, 0);
-        REQUIRE(atk.send_to(to, d.data(), (int)d.size()) == (int)d.size());
+        auto d = make_datagram(0xDEADBEEFu, UDP_VERSION, MSG_HELLO,
+                (u8)UdpChan::Unreliable, 1, 0, 0, nullptr, 0);
+        REQUIRE(send_all(atk, to, d.data(), (int)d.size(), TIMEOUT_MS));
     }
 
     // 3) bad version
     {
-        auto d = make_datagram(UDP_MAGIC, 0x9999u, MSG_HELLO, (u8)UdpChan::Unreliable,
-            2, 0, 0, nullptr, 0);
-        REQUIRE(atk.send_to(to, d.data(), (int)d.size()) == (int)d.size());
+        auto d = make_datagram(UDP_MAGIC, 0x9999u, MSG_HELLO,
+                (u8)UdpChan::Unreliable, 2, 0, 0, nullptr, 0);
+        REQUIRE(send_all(atk, to, d.data(), (int)d.size(), TIMEOUT_MS));
     }
 
     // 4) payload_len mismatch (claims 10, actually 0)
     {
-        auto d = make_datagram(UDP_MAGIC, UDP_VERSION, MSG_HELLO, (u8)UdpChan::Unreliable,
-            3, 0, 0, nullptr, 10);
+        auto d = make_datagram(UDP_MAGIC, UDP_VERSION, MSG_HELLO,
+                (u8)UdpChan::Unreliable, 3, 0, 0, nullptr, 10);
         // send only header bytes, truncated
-        REQUIRE(atk.send_to(to, d.data(), (int)sizeof(UdpHeader)) == (int)sizeof(UdpHeader));
+        REQUIRE(send_all(atk, to, d.data(), (int)sizeof(UdpHeader), TIMEOUT_MS));
     }
 
     // 5) user packet before establish should be ignored (no user_pkts++)
@@ -158,13 +169,13 @@ TEST_CASE("server drops malformed packets and never establishes", "[udp][fuzz]")
         u8 p[4]{ 'A','B','C','D' };
         auto d = make_datagram(UDP_MAGIC, UDP_VERSION, 32, (u8)UdpChan::Reliable,
             4, 0, 0, p, 4);
-        REQUIRE(atk.send_to(to, d.data(), (int)d.size()) == (int)d.size());
+        REQUIRE(send_all(atk, to, d.data(), (int)d.size(), TIMEOUT_MS));
     }
 
     // send DISCONNECT before any valid handshake => peer not registered => MUST NOT call on_disconnect
     {
         auto d = make_disconnect(/*sid=*/1, DisconnectReason::Unknown, /*seq=*/9);
-        REQUIRE(atk.send_to(to, d.data(), (int)d.size()) == (int)d.size());
+        REQUIRE(send_all(atk, to, d.data(), (int)d.size(), TIMEOUT_MS));
     }
 
     spin_sleep_ms(200);

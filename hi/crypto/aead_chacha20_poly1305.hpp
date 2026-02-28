@@ -18,13 +18,13 @@ namespace cl {
         template<usize N> using byte_view_mut_n = io::byte_view_mut_n<N>;
 
         // Constants
-        static IO_CONSTEXPR_VAR usize KEY_BYTES = cl::chacha20::KEY_BYTES;    // 32
+        static IO_CONSTEXPR_VAR usize KEY_BYTES = cl::chacha20::KEY_BYTES;      // 32
         static IO_CONSTEXPR_VAR usize NONCE_BYTES = cl::chacha20::NONCE_BYTES;  // 12
-        static IO_CONSTEXPR_VAR usize TAG_BYTES = cl::poly1305::TAG_BYTES;    // 16
+        static IO_CONSTEXPR_VAR usize TAG_BYTES = cl::poly1305::TAG_BYTES;      // 16
 
-        static_assert(KEY_BYTES == 32, "aead: key is 32 bytes");
+        static_assert(KEY_BYTES   == 32, "aead: key is 32 bytes");
         static_assert(NONCE_BYTES == 12, "aead: nonce is 12 bytes");
-        static_assert(TAG_BYTES == 16, "aead: tag is 16 bytes");
+        static_assert(TAG_BYTES   == 16, "aead: tag is 16 bytes");
 
         // RAII (no state; still keep for symmetry / future extension)
         explicit IO_CONSTEXPR aead_chacha20_poly1305() noexcept = default;
@@ -128,7 +128,7 @@ namespace cl {
             u8 got[TAG_BYTES]{};
             mac_rfc8439(key, nonce, aad, ciphertext, io::as_view_mut(got));
 
-            if (!cl::poly1305::ct_equal16(io::as_view(got), tag))
+            if (!cl::poly1305::ct_equal(io::as_view(got), tag))
                 return false;
 
             // 2) Decrypt with counter=1

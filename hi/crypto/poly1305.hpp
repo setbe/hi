@@ -65,17 +65,17 @@ namespace cl {
 
                 t4 += (1u << 24); // implicit 1 for full block
 
-                u64 h0 = (u64)_h[0]+t0;
-                u64 h1 = (u64)_h[1]+t1;
-                u64 h2 = (u64)_h[2]+t2;
-                u64 h3 = (u64)_h[3]+t3;
-                u64 h4 = (u64)_h[4]+t4;
+                u32 h0 = (u64)_h[0]+t0;
+                u32 h1 = (u64)_h[1]+t1;
+                u32 h2 = (u64)_h[2]+t2;
+                u32 h3 = (u64)_h[3]+t3;
+                u32 h4 = (u64)_h[4]+t4;
 
-                u64 d0 = h0*_r[0] + h1*_r5[4] + h2*_r5[3] + h3*_r5[2] + h4*_r5[1];
-                u64 d1 = h0*_r[1] + h1*_r[0]  + h2*_r5[4] + h3*_r5[3] + h4*_r5[2];
-                u64 d2 = h0*_r[2] + h1*_r[1]  + h2*_r[0]  + h3*_r5[4] + h4*_r5[3];
-                u64 d3 = h0*_r[3] + h1*_r[2]  + h2*_r[1]  + h3*_r[0]  + h4*_r5[4];
-                u64 d4 = h0*_r[4] + h1*_r[3]  + h2*_r[2]  + h3*_r[1]  + h4*_r[0];
+                u64 d0 = io::mul_u32(h0, _r[0]) + io::mul_u32(h1, _r5[4]) + io::mul_u32(h2, _r5[3]) + io::mul_u32(h3, _r5[2]) + io::mul_u32(h4, _r5[1]);
+                u64 d1 = io::mul_u32(h0, _r[1]) + io::mul_u32(h1, _r[0])  + io::mul_u32(h2, _r5[4]) + io::mul_u32(h3, _r5[3]) + io::mul_u32(h4, _r5[2]);
+                u64 d2 = io::mul_u32(h0, _r[2]) + io::mul_u32(h1, _r[1])  + io::mul_u32(h2, _r[0])  + io::mul_u32(h3, _r5[4]) + io::mul_u32(h4, _r5[3]);
+                u64 d3 = io::mul_u32(h0, _r[3]) + io::mul_u32(h1, _r[2])  + io::mul_u32(h2, _r[1])  + io::mul_u32(h3, _r[0])  + io::mul_u32(h4, _r5[4]);
+                u64 d4 = io::mul_u32(h0, _r[4]) + io::mul_u32(h1, _r[3])  + io::mul_u32(h2, _r[2])  + io::mul_u32(h3, _r[1])  + io::mul_u32(h4, _r[0]);
 
                 u64 c;
                          c = (d0 >> 26); _h[0] = (u32)(d0 & 0x3ffffffu);
@@ -113,20 +113,19 @@ namespace cl {
             else if (limb == 3) t3 += add;
             else                t4 += add;
 
-            u64 h0 = (u64)_h[0] + t0;
-            u64 h1 = (u64)_h[1] + t1;
-            u64 h2 = (u64)_h[2] + t2;
-            u64 h3 = (u64)_h[3] + t3;
-            u64 h4 = (u64)_h[4] + t4;
-
-            u64 d0 = h0*_r[0] + h1*_r5[4] + h2*_r5[3] + h3*_r5[2] + h4*_r5[1];
-            u64 d1 = h0*_r[1] + h1*_r[0]  + h2*_r5[4] + h3*_r5[3] + h4*_r5[2];
-            u64 d2 = h0*_r[2] + h1*_r[1]  + h2*_r[0]  + h3*_r5[4] + h4*_r5[3];
-            u64 d3 = h0*_r[3] + h1*_r[2]  + h2*_r[1]  + h3*_r[0]  + h4*_r5[4];
-            u64 d4 = h0*_r[4] + h1*_r[3]  + h2*_r[2]  + h3*_r[1]  + h4*_r[0];
+            u32 h0 = (u64)_h[0] + t0;
+            u32 h1 = (u64)_h[1] + t1;
+            u32 h2 = (u64)_h[2] + t2;
+            u32 h3 = (u64)_h[3] + t3;
+            u32 h4 = (u64)_h[4] + t4;
+            
+            u64 d0 = io::mul_u32(h0, _r[0]) + io::mul_u32(h1, _r5[4]) + io::mul_u32(h2, _r5[3]) + io::mul_u32(h3, _r5[2]) + io::mul_u32(h4, _r5[1]);
+            u64 d1 = io::mul_u32(h0, _r[1]) + io::mul_u32(h1, _r[0])  + io::mul_u32(h2, _r5[4]) + io::mul_u32(h3, _r5[3]) + io::mul_u32(h4, _r5[2]);
+            u64 d2 = io::mul_u32(h0, _r[2]) + io::mul_u32(h1, _r[1])  + io::mul_u32(h2, _r[0])  + io::mul_u32(h3, _r5[4]) + io::mul_u32(h4, _r5[3]);
+            u64 d3 = io::mul_u32(h0, _r[3]) + io::mul_u32(h1, _r[2])  + io::mul_u32(h2, _r[1])  + io::mul_u32(h3, _r[0])  + io::mul_u32(h4, _r5[4]);
+            u64 d4 = io::mul_u32(h0, _r[4]) + io::mul_u32(h1, _r[3])  + io::mul_u32(h2, _r[2])  + io::mul_u32(h3, _r[1])  + io::mul_u32(h4, _r[0]);
 
             u64 c;
-
                      c = (d0 >> 26); _h[0] = (u32)(d0 & 0x3ffffffu);
             d1 += c; c = (d1 >> 26); _h[1] = (u32)(d1 & 0x3ffffffu);
             d2 += c; c = (d2 >> 26); _h[2] = (u32)(d2 & 0x3ffffffu);

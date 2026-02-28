@@ -203,7 +203,7 @@ function(hi_apply_freestanding target)
         )
 
         # 3) Keep only what you explicitly link (Win32 API libs etc.)
-        target_link_libraries(${target} PRIVATE user32 gdi32 opengl32 kernel32 bcrypt)
+        target_link_libraries(${target} PRIVATE user32 gdi32 opengl32 kernel32 bcrypt ws2_32)
     endif()
 
     # GCC/Clang freestanding compile options

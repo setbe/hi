@@ -40,6 +40,14 @@
 #include "io.hpp"
 #include "crypto/poly1305.hpp"
 
+#ifndef assert
+#   ifdef _DEBUG
+#       include <assert.h>
+#   else
+#       define assert
+#   endif
+#endif
+
 #if defined(_WIN32)
 #   define WIN32_LEAN_AND_MEAN
 #   include <Windows.h>
@@ -290,14 +298,12 @@ namespace native {
     // We implement bswap and use it conditionally for big-endian hosts.
 
     static IO_CONSTEXPR u16 bswap16(u16 x) noexcept { return (u16)((x << 8) | (x >> 8)); }
-
     static IO_CONSTEXPR u32 bswap32(u32 x) noexcept {
         return ((x & 0x000000FFu) << 24) |
             ((x & 0x0000FF00u) << 8) |
             ((x & 0x00FF0000u) >> 8) |
             ((x & 0xFF000000u) >> 24);
     }
-
     static IO_CONSTEXPR u64 bswap64(u64 x) noexcept {
         return ((x & 0x00000000000000FFull) << 56) |
             ((x & 0x000000000000FF00ull) << 40) |
@@ -320,7 +326,6 @@ namespace native {
     IO_CONSTEXPR u16 h2ns(u16 x) noexcept { return IO_LITTLE_ENDIAN ? bswap16(x) : x; }
     IO_CONSTEXPR u32 h2nl(u32 x) noexcept { return IO_LITTLE_ENDIAN ? bswap32(x) : x; }
     IO_CONSTEXPR u64 h2nll(u64 x) noexcept { return IO_LITTLE_ENDIAN ? bswap64(x) : x; }
-
     IO_CONSTEXPR u16 n2hs(u16 x) noexcept  { return ::io::h2ns(x); }
     IO_CONSTEXPR u32 n2hl(u32 x) noexcept  { return ::io::h2nl(x); }
     IO_CONSTEXPR u64 n2hll(u64 x) noexcept { return ::io::h2nll(x); }
@@ -376,11 +381,7 @@ namespace native {
         if (v > MAX_MTU) return MAX_MTU;
         return v;
     }
-
-    static inline u32 rotl32(u32 x, u32 r) noexcept { return (x << (r & 31)) | (x >> ((32 - r) & 31)); }
-
-    static inline void cookie_tag16(byte_view_mut_n<16> out16,
-                                    byte_view_n<32> key32,
+    static inline void cookie_tag16(byte_view_mut_n<16> out16, byte_view_n<32> key32,
                                     Endpoint ep, u32 nonce, u64 now_ms) noexcept {
         poly_cookie pc{};
         pc.ip_be          = ep.addr_be;
@@ -394,9 +395,7 @@ namespace native {
         mac.update(byte_view_n<sizeof(pc)>{ (const io::u8*)&pc });
         mac.final(out16);
     }
-
-    static inline bool cookie_check(byte_view_n<16> recv16,
-                                    byte_view_n<32> key32,
+    static inline bool cookie_check(byte_view_n<16> recv16, byte_view_n<32> key32,
                                     Endpoint ep, io::u32 nonce, io::u64 now_ms) noexcept {
         io::u8 t0[16], t1[16];
         cookie_tag16(byte_view_mut_n<16>{ t0 }, key32, ep, nonce, now_ms);
@@ -699,7 +698,6 @@ namespace native {
         u64 ack_bits = 0;
         u32 ack = 0;
     };
-
     IO_NODISCARD static inline AckState make_ack_state(const SeqWindow128& w) noexcept {
         AckState a{};
         a.ack = w.last;
@@ -708,7 +706,6 @@ namespace native {
         a.ack_bits = (w.bits0 >> 1) | ((w.bits1 & 1ull) << 63);
         return a;
     }
-
     IO_NODISCARD static inline bool is_acked_by(u32 seq, u32 ack, u64 ack_bits) noexcept {
         if (seq == 0 || ack == 0) return false;
         if (seq == ack) return true;
@@ -725,7 +722,6 @@ namespace native {
     // ====================================================================
     // UDP header
     // ====================================================================
-    
 
     enum class UdpChan : u8 { Unreliable = 0, Reliable = 1 };
 
@@ -1654,6 +1650,13 @@ namespace native {
             if (cb.on_drop) cb.on_drop(cb.ud, from, why, r);
         }
 
+        static bool hs_payload_ok(u8 t, int payload_len) noexcept {
+            if (t == MSG_HELLO)  return payload_len == (int)sizeof(msg_hello);
+            if (t == MSG_HELLO2) return payload_len == (int)sizeof(msg_hello2);
+            if (t == MSG_COOKIE || t == MSG_WELCOME) return false;
+            return false;
+        };
+
     public:
 
 #if defined(_WIN32)
@@ -1722,6 +1725,10 @@ namespace native {
 
                         // handshake messages allowed always
                         if (is_handshake_msg(h.type)) {
+                            if (!hs_payload_ok(h.type, payload_len)) {
+                                drop(cb, from, Error::Generic, DropReason::BadHs);
+                                continue;
+                            }
                             udp_peer_state* ps = get_peer_create(from);
                             if (!ps) {
                                 drop(cb, from, Error::Generic, DropReason::FullPeerTable);
@@ -1898,6 +1905,10 @@ namespace native {
                         const byte_view payload_view{ recv_buf + sizeof(UdpHeader), (usize)payload_len };
 
                         if (is_handshake_msg(h.type)) {
+                            if (!hs_payload_ok(h.type, payload_len)) {
+                                drop(cb, from, Error::Generic, DropReason::BadHs);
+                                continue;
+                            }
                             udp_peer_state* ps = get_peer_create(from);
                             if (!ps) {
                                 drop(cb, from, Error::Generic, DropReason::FullPeerTable);

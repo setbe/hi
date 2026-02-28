@@ -327,7 +327,9 @@ namespace io {
         r.hi = a.hi + (r.lo < a.lo);
         return r;
     }
-
+    IO_NODISCARD static inline u64 mul_u32(u32 a, u32 b) noexcept {
+        return (u64)a * (u64)b; // 32x32->64, on x86 usually without __allmul
+    }
     IO_NODISCARD static inline u128 mul_u64(u64 a, u64 b) noexcept {
 #if defined(__SIZEOF_INT128__)
         unsigned __int128 p = (unsigned __int128)a * (unsigned __int128)b;
@@ -3683,10 +3685,6 @@ namespace io {
 #endif // IO_HAS_STD
 
 #if !defined(IO_HAS_STD) && defined(__linux__)
-namespace io {
-    struct nothrow_t { explicit constexpr nothrow_t(int) {} };
-    constexpr nothrow_t nothrow{0};
-} // namespace io
 #if !defined(HI_GUI_APP)
 extern "C" {
     int main(); // Declare user's main (in same TU will exist)
@@ -3700,14 +3698,22 @@ extern "C" {
 #endif // !HI_GUI_APP
 #endif // !IO_HAS_STD && __linux__
 
+#if !defined(IO_HAS_STD)
+    namespace io {
+        struct nothrow_t { explicit constexpr nothrow_t(int) {} };
+        constexpr nothrow_t nothrow{ 0 };
+    } // namespace io
+#endif
+
 // ------------------------- new -------------------------
 void* IO_CDECL operator new(io::usize bytes) {
     if (void* p = io::alloc_aligned(bytes ? bytes : 1, alignof(void*))) return p;
     // freestanding: no exceptions => terminate-style
 #if defined(_MSC_VER)
     __debugbreak();
-#endif
+#else
     trap();
+#endif
 }
 void* IO_CDECL operator new[](io::usize bytes) { return ::operator new(bytes); }
 
