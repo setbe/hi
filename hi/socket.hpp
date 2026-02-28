@@ -405,15 +405,23 @@ namespace native {
     }
 
     enum class Protocol : u8 { TCP, UDP };
-    enum class Error : u8 { None = 0, WouldBlock, Again, Closed, Generic };
+    enum class Error : u8 {
+        None = 0,
+        WouldBlock,
+        Again,
+        Closed,
+        Generic,
+        ConnReset,
+    };
 
-    static const char* error_str(Error r) {
+    static char_view error_str(Error r) noexcept {
         switch (r) {
             case Error::None:       return "None";
             case Error::WouldBlock: return "WouldBlock";
             case Error::Again:      return "Again";
             case Error::Closed:     return "Closed";
             case Error::Generic:    return "Generic";
+            case Error::ConnReset:  return "ConnReset";
             default: return "?";
         }
     }
@@ -455,6 +463,7 @@ namespace native {
         IO_NODISCARD Protocol protocol() const noexcept { return _proto; }
         IO_NODISCARD native_t native() const noexcept { return _s; }
         IO_NODISCARD Error error() const noexcept { return _error; }
+        IO_NODISCARD char_view error_str() const noexcept { return ::io::error_str(_error); }
 
         IO_NODISCARD bool open(Protocol proto) noexcept {
             _proto = proto;
@@ -534,17 +543,17 @@ namespace native {
 #endif
         }
         // UDP
-        IO_NODISCARD int send_to(Endpoint to, const void* data, int size) noexcept {
+        IO_NODISCARD int send_to(Endpoint to, byte_view v) noexcept {
             if (!_opened || _proto != Protocol::UDP) { _error = Error::Generic; return -1; }
-            if (!data && size != 0) { _error = Error::Generic; return -1; }
-            if (size < 0) { _error = Error::Generic; return -1; }
+            if (!v.data() && v.size() != 0) { _error = Error::Generic; return -1; }
 #if defined(_WIN32)
             sockaddr_in a{};
             a.sin_family      = AF_INET;
             a.sin_addr.s_addr = to.addr_be;
             a.sin_port        = to.port_be;
-            const int r = ::sendto(_s, reinterpret_cast<const char*>(data), size, 0,
+            const int r = ::sendto(_s, reinterpret_cast<const char*>(v.data()), (int)v.size(), 0,
                 reinterpret_cast<sockaddr*>(&a), (int)sizeof(a));
+            if (r != SOCKET_ERROR) { _error = Error::None; return r; }
             update_last_error();
             return -1;
 #elif defined(__linux__)
@@ -553,7 +562,7 @@ namespace native {
             a.sin_family = (u16)k_af_inet;
             a.sin_addr.s_addr = to.addr_be;
             a.sin_port = to.port_be;
-            const long r = sys_sendto(_s, data, (unsigned long)size, 0, &a, (socklen_t)sizeof(a));
+            const long r = sys_sendto(_s, v.data(), (unsigned long)v.size(), 0, &a, (socklen_t)sizeof(a));
             if (!is_err(r)) { _error = Error::None; return (int)r; }
             update_last_error_from_ret(r);
             return -1;
@@ -561,14 +570,13 @@ namespace native {
 #   error "send_to(): Not implemented"
 #endif
         }
-        IO_NODISCARD int recv_from(Endpoint& out_from, void* data, int size) noexcept {
+        IO_NODISCARD int recv_from(Endpoint& out_from, byte_view_mut v) noexcept {
             if (!_opened || _proto != Protocol::UDP) { _error = Error::Generic; return -1; }
-            if (!data && size != 0) { _error = Error::Generic; return -1; }
-            if (size < 0) { _error = Error::Generic; return -1; }
+            if (!v.data() && v.size() != 0) { _error = Error::Generic; return -1; }
 #if defined(_WIN32)
             sockaddr_in a{};
             int alen = (int)sizeof(a);
-            const int r = ::recvfrom(_s, reinterpret_cast<char*>(data), size, 0,
+            const int r = ::recvfrom(_s, reinterpret_cast<char*>(v.data()), (int)v.size(), 0,
                 reinterpret_cast<sockaddr*>(&a), &alen);
             if (r >= 0) {
                 out_from.addr_be = a.sin_addr.s_addr;
@@ -582,7 +590,7 @@ namespace native {
             using namespace native;
             sockaddr_in a{};
             socklen_t alen = (socklen_t)sizeof(a);
-            const long r = sys_recvfrom(_s, data, (unsigned long)size, 0, &a, &alen);
+            const long r = sys_recvfrom(_s, v.data(), (unsigned long)v.size(), 0, &a, &alen);
             if (!is_err(r)) {
                 out_from.addr_be = a.sin_addr.s_addr;
                 out_from.port_be = a.sin_port;
@@ -603,7 +611,7 @@ namespace native {
             const int e = WSAGetLastError();
             if (e == WSAEWOULDBLOCK) { _error = Error::WouldBlock; return; }
             if (e == WSAEINTR)       { _error = Error::Again;      return; }
-            if (e == WSAECONNRESET)  { _error = Error::Closed;     return; }
+            if (e == WSAECONNRESET)  { _error = Error::ConnReset;     return; }
             _error = Error::Generic;
 #elif defined(__linux__)
         void update_last_error_from_ret(long r) noexcept {
@@ -612,7 +620,7 @@ namespace native {
             const long e = err_no(r);
             if (e == k_eagain || e == k_ewouldblock) { _error = Error::WouldBlock; return; }
             if (e == k_eintr)                        { _error = Error::Again; return; }
-            if (e == k_econnreset)                   { _error = Error::Closed; return; }
+            if (e == k_econnreset)                   { _error = Error::ConnReset; return; }
             _error = Error::Generic;
 #else
 #   error "update_last_error(): Not implemented"
@@ -1136,7 +1144,7 @@ namespace native {
                     tx_arena.free_front(pr.len);
                     continue;
                 }
-                const int sent = udp.send_to(pr.to, p, (int)pr.len);
+                const int sent = udp.send_to(pr.to, { p, (usize)pr.len });
                 if (sent == (int)pr.len) {
                     // success: remove from queue and free arena bytes
                     sendq.drop_front(SENDQ_CAP);
@@ -1690,7 +1698,7 @@ namespace native {
                 if (fds[0].revents & POLLRDNORM) {
                     for (;;) {
                         Endpoint from{};
-                        const int n = udp.recv_from(from, recv_buf, recv_cap);
+                        const int n = udp.recv_from(from, { recv_buf, (usize)recv_cap });
                         if (n <= 0) break;
 
                         if (n < (int)sizeof(UdpHeader)) {

@@ -19,10 +19,10 @@ namespace test_socket {
         return e == Error::WouldBlock || e == Error::Again;
     }
 
-    static inline bool recv_one(Socket& s, Endpoint& from, u8* buf, int cap, int& out_n, u64 timeout_ms) noexcept {
+    static inline bool recv_one(Socket& s, Endpoint& from, u8* buf, usize cap, int& out_n, u64 timeout_ms) noexcept {
         const u64 start = monotonic_ms();
         for (;;) {
-            out_n = s.recv_from(from, buf, cap);
+            out_n = s.recv_from(from, { buf, cap });
             if (out_n > 0) return true;
             if (!would_block(s.error())) return false;
             if (monotonic_ms() - start >= timeout_ms) return false;
@@ -73,7 +73,7 @@ namespace test_socket {
     }
 
     static inline bool send_raw(Socket& s, Endpoint to, const u8* bytes, u32 len) noexcept {
-        const int sent = s.send_to(to, bytes, (int)len);
+        const int sent = s.send_to(to, { bytes,len });
         return sent == (int)len;
     }
 
@@ -118,11 +118,11 @@ namespace test_socket {
 
     // Drain for a short window and REQUIRE that we do NOT observe COOKIE/WELCOME.
     // (We ignore malformed frames/magic/version, because those are "noise".)
-    static inline void require_no_cookie_or_welcome(Socket& s, Endpoint srv, u8* rx, int cap, u64 window_ms) noexcept {
+    static inline void require_no_cookie_or_welcome(Socket& s, Endpoint srv, u8* rx, usize cap, u64 window_ms) noexcept {
         const u64 until = monotonic_ms() + window_ms;
         while (monotonic_ms() < until) {
             Endpoint from{};
-            const int n = s.recv_from(from, rx, cap);
+            const int n = s.recv_from(from, { rx,cap });
             if (n <= 0) {
                 if (!would_block(s.error())) break;
                 io::sleep_ms(1);
@@ -183,7 +183,7 @@ static inline bool honest_handshake(Socket& s, Endpoint srv,
 
         Endpoint from{};
         int got = 0;
-        if (!recv_one(s, from, rx, (int)BUF_CAP, got, per_step_timeout_ms))
+        if (!recv_one(s, from, rx, BUF_CAP, got, per_step_timeout_ms))
             continue;
         if (!endpoint_eq(from, srv))
             continue;
@@ -228,7 +228,7 @@ static inline bool honest_handshake(Socket& s, Endpoint srv,
 
         Endpoint from{};
         int got = 0;
-        if (!recv_one(s, from, rx, (int)BUF_CAP, got, per_step_timeout_ms))
+        if (!recv_one(s, from, rx, BUF_CAP, got, per_step_timeout_ms))
             continue;
         if (!endpoint_eq(from, srv))
             continue;

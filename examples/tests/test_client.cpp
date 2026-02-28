@@ -1,4 +1,7 @@
-﻿#define CATCH_CONFIG_MAIN
+﻿// Build: Debug/Release with std.
+// Run: Run `server.exe`, and only then `test_client.exe`
+
+#define CATCH_CONFIG_MAIN
 #define IO_IMPLEMENTATION
 #include "test_socket.hpp"
 
@@ -18,7 +21,7 @@ TEST_CASE("Attack phases: do not elicit COOKIE/WELCOME; server still handshakes 
         test_socket::fill_prng(rng, tx, n);
         if (n) (void)test_socket::send_raw(attacker, srv, tx, n);
     }
-    test_socket::require_no_cookie_or_welcome(attacker, srv, rx, (int)BUF_CAP, /*window_ms=*/50);
+    test_socket::require_no_cookie_or_welcome(attacker, srv, rx, BUF_CAP, /*window_ms=*/50);
 
     // -------------------- Phase 2: wrong magic/version + framing mismatches --------------------
     {
@@ -84,7 +87,7 @@ TEST_CASE("Attack phases: do not elicit COOKIE/WELCOME; server still handshakes 
             (void)test_socket::send_raw(attacker, srv, tx, n);
         }
     }
-    test_socket::require_no_cookie_or_welcome(attacker, srv, rx, (int)BUF_CAP, /*window_ms=*/120);
+    test_socket::require_no_cookie_or_welcome(attacker, srv, rx, BUF_CAP, /*window_ms=*/120);
 
     // -------------------- Phase 3: user packet before establish should be ignored --------------------
     {
@@ -101,7 +104,7 @@ TEST_CASE("Attack phases: do not elicit COOKIE/WELCOME; server still handshakes 
         REQUIRE(n != 0);
         (void)test_socket::send_raw(attacker, srv, tx, n);
     }
-    test_socket::require_no_cookie_or_welcome(attacker, srv, rx, (int)BUF_CAP, /*window_ms=*/120);
+    test_socket::require_no_cookie_or_welcome(attacker, srv, rx, BUF_CAP, /*window_ms=*/120);
 
     // -------------------- Final: honest handshake from a fresh socket must succeed --------------------
     Socket honest = test_socket::make_udp_socket();
