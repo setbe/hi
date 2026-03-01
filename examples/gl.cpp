@@ -12,9 +12,11 @@ struct MainWindow : public hi::Window<MainWindow> {
     bool is_cursor{ true };
     bool is_fullscreen{ false };
 
+    hi::AtlasId diversity{ -1 };
+    hi::AtlasId cjk{ -1 };
+
     MainWindow() noexcept {
         this->setTitle(IO_U8("Hello World! Привіт Світе!"));
-        this->setGlCore(3, 3);
     }
 
     void onRender() noexcept override {
@@ -34,12 +36,18 @@ struct MainWindow : public hi::Window<MainWindow> {
         ts.outline_px = text_scale * 0.05f;
         hi::TextDraw td{};
         td.style = ts;
-        td.atlas = 0;
+        td.atlas = diversity;
         td.scale = text_scale;
         td.x = move_offset_x;
         td.y = move_offset_y;
-        td.text = IO_U8("AHello World!\nПривіт Світе!");
+        
+        td.space_between = -0.18f;
+        td.tab_width = 4.f;
+        td.text = IO_U8("AHello World!\nПривіт Світе!\n\tThis line has tab");
         this->DrawText(td);
+
+        this->FlushText();
+        this->SwapBuffers();
     }
 
     void onError(hi::Error err, hi::AboutError ae) noexcept override {
@@ -61,44 +69,43 @@ struct MainWindow : public hi::Window<MainWindow> {
 
     void onScroll(float deltaX, float deltaY) noexcept override {
         text_scale += deltaX;
+        text_scale += deltaY;
         io::out.reset();
         io::out << "Current scale is " << text_scale << " times";
         setTitle(io::out.scrap_view());
     }
 
-    hi::AtlasId create_atlas() noexcept {
+    bool LoadResources() noexcept {
         io::string cwd, font_path;
         if (!fs::current_directory(cwd)
             || !fs::path_join(cwd, DEFAULT_FONT_FILENAME, font_path))
-            return -1;
+            return false;
 
         io::out << "current dir is: " << cwd << '\n'
                 << "searching for font: " << font_path << io::out.endl;
         hi::FontId font_id = this->LoadFont(DEFAULT_FONT_FILENAME);
-        if (font_id < 0) return -1;
+        if (font_id < 0) return false;
 
         hi::FontAtlasDesc desc{};
         desc.mode = hi::FontAtlasMode::SDF;
-        desc.pixel_height = 64;
+        desc.pixel_height = 24;
         desc.spread_px = 4.f;
-        io::u32 cps[]{ 'A', 'H', 'e', 'l', 'o', 'W', 'r', 'd', '!', L'П', L'р', L'и', L'в', L'і', L'т', L'С', L'е'};
-        desc.codepoints = cps;
-        desc.codepoint_count = sizeof(cps);
-        hi::AtlasId atlas_id = this->GenerateFontAtlas(font_id, desc);
-        io::u16 atlas_side = this->getAtlasSide(atlas_id);
-        io::out << "Generated atlas has " << atlas_side << 'x' << atlas_side << " image resolution" << io::out.endl;
-        return atlas_id;
+
+        diversity = this->GenerateFontAtlas(font_id, desc, stbtt_codepoints::Script::Latin, stbtt_codepoints::Script::Cyrillic);
+        if (diversity < 0) return false;
+
+        io::out << "diversity: " << getAtlasSide(diversity) << io::out.endl;
+        return true;
     }
 }; // struct MainWindow
 
 int main() {
     MainWindow win{};
-    if (win.create_atlas() < 0) io::exit_process(-1);
+    if (!win.LoadResources()) io::exit_process(-1);
 
     while (win.PollEvents()) {
         win.Render();
-        win.FlushText();
-        win.SwapBuffers();
+        
     }
     io::exit_process(0);
 }

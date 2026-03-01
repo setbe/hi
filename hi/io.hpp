@@ -306,6 +306,7 @@ namespace io {
     IO_DEFINE_GLOBAL_ARRAY_AND_COUNT(in_buffer, char, IO_TERMINAL_BUFFER_SIZE)
     static IO_CONSTEXPR_VAR usize npos = static_cast<usize>(-1);
 
+    static inline float ceil(float x) noexcept { int i = (int)x; return (x > (float)i) ? (float)(i + 1) : (float)i; }
     IO_CONSTEXPR usize len(const char* s) noexcept {
         if (!s) return 0; // avoid UB by returning 0 for null pointers
         const char* p = s;

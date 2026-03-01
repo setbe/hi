@@ -941,16 +941,18 @@ struct Attr {
 private:
     io::u32 _amount;
     DrawElementsType _type;
+    bool _normalize;
 
 public:
     // amount_of_components e.g. 3 for vec3
     // gl_type: Byte, UnsignedByte, Short, UnsignedShort, Int, UnsignedInt, Float.    
-    IO_CONSTEXPR Attr(io::u32 amount_of_components, DrawElementsType gl_type = DrawElementsType::Float) noexcept
-        : _amount{ amount_of_components }, _type{ gl_type } {}
+    IO_CONSTEXPR Attr(io::u32 amount_of_components, DrawElementsType gl_type = DrawElementsType::Float, bool normalize = false) noexcept
+        : _amount{ amount_of_components }, _type{ gl_type }, _normalize{ normalize } {}
 
     // amount of components, e.g. 3 for vec3
     IO_NODISCARD IO_CONSTEXPR io::u32 amount() const noexcept { return _amount; }
     IO_NODISCARD IO_CONSTEXPR DrawElementsType type() const noexcept { return _type; }
+    IO_NODISCARD IO_CONSTEXPR bool normalized() const noexcept { return _normalize; }
     IO_NODISCARD IO_CONSTEXPR int size() const noexcept {
         return amount() * getDrawElementsTypeSize(type()); // e.g. `3 * sizeof(float)`
     }
@@ -959,6 +961,10 @@ public:
 template<typename T>
 IO_CONSTEXPR const Attr AttrOf(io::u32 amount) noexcept {
     return Attr(amount, DrawElementsTypeOf<T>::value);
+}
+template<typename T>
+IO_CONSTEXPR const Attr AttrOf(io::u32 amount, bool normalize) noexcept {
+    return Attr(amount, DrawElementsTypeOf<T>::value, normalize);
 }
 
 struct MeshBinder {
@@ -984,7 +990,7 @@ struct MeshBinder {
                 index,        // location
                 it->amount(), // amount of comps
                 it->type(),   // gl type
-                false,        // normalize
+                it->normalized(),
                 stride,       // stride
                 reinterpret_cast<void*>(offset) // attr offset
             );

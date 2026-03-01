@@ -1,6 +1,7 @@
 #include "io.hpp"
 #include "gl_loader.hpp"
 #include "../3rd_party/stb_truetype_stream/stb_truetype_stream.hpp"
+#include "../3rd_party/stb_truetype_stream/codepoints/stbtt_codepoints_stream.hpp"
 
 #ifdef IO_IMPLEMENTATION
 #   if defined(_WIN32)
@@ -342,7 +343,7 @@ struct IWindow {
     // --- Defined by library ---
     virtual void Render() noexcept = 0;
     virtual void onGeometryChange(int w, int h) noexcept = 0;
-    IO_NODISCARD virtual void setApiAlive(RendererApi api, bool alive) noexcept = 0;
+
     IO_NODISCARD virtual RendererApi api() const noexcept = 0;
     IO_NODISCARD virtual       native::Opengl& opengl()        noexcept = 0;
     IO_NODISCARD virtual const native::Opengl& opengl()  const noexcept = 0;
@@ -915,11 +916,11 @@ namespace glx {
 #ifdef IO_IMPLEMENTATION
 #   if defined(__linux__)
             ::GLXContext _ctx{ nullptr };
+            ::hi::IWindow* _win{};
 #   elif defined(_WIN32)
             HGLRC _hglrc{ nullptr };
 #   endif
 #endif // IO_IMPLEMENTATION
-            ::hi::IWindow* _win{};
             io::u8 _req_core_major{3};
             io::u8 _req_core_minor{3};
 
@@ -1214,8 +1215,6 @@ namespace glx {
                 if (!miss.empty()) return AboutError::MissingRequiredOpenglFunction;
                 gl::loaded = true;
 
-                win.setApiAlive(RendererApi::Opengl, true);
-
                 return AboutError::None;
             } // CreateModernContext
         } // namespace wgl
@@ -1224,7 +1223,6 @@ namespace glx {
     //                          namespace hi::native::*
     // ========================================================================
         IO_NODISCARD AboutError Opengl::CreateContext(IWindow& win) noexcept {
-            _win = &win;
             DummyWindow dummy{};
 
             wgl::PFNWGLCHOOSEPIXELFORMATARBPROC    choose{ nullptr };
@@ -1235,7 +1233,6 @@ namespace glx {
             return wgl::CreateModernContext(win, choose, create);
         }
         Opengl::~Opengl() noexcept {
-            _win->setApiAlive(RendererApi::None, false);
             HGLRC ctx = reinterpret_cast<HGLRC>(_hglrc);
             // Unbind context from any HDC (just in case it's current)
             if (wglGetCurrentContext() == _hglrc) wglMakeCurrent(nullptr, nullptr);
@@ -1315,7 +1312,6 @@ namespace glx {
             }
             gl::loaded = true;
             _ctx = ctx;
-            _win->setApiAlive(RendererApi::Opengl, true);
             return AboutError::None;
         }
 
@@ -1323,7 +1319,6 @@ namespace glx {
     }
 
     native::Opengl::~Opengl() noexcept {
-        _win->setApiAlive(RendererApi::None, false);
         glXDestroyContext(_win->native().dpy(), _ctx);
     }
 
@@ -1346,6 +1341,78 @@ namespace glx {
 #endif
 } // namespace native
 
+    template<class Win>
+    struct ContextGuardT {
+        Win& w;
+        RendererApi api{ RendererApi::None };
+        bool alive = false;
+
+        ContextGuardT(Win& ww, io::u8 gl_core_major, io::u8 gl_core_minor) noexcept : w(ww) {
+            new (&w.g) native::Opengl(gl_core_major, gl_core_minor);
+            const AboutError about = w.g.CreateContext(w);
+            if (about != AboutError::None) {
+                w.onError(Error::Opengl, about);
+                w.g.~Opengl();
+                return;
+            }
+            gl::Viewport(0, 0, w.width(), w.height());
+            api = RendererApi::Opengl;
+            alive = true;
+        }
+
+        ~ContextGuardT() noexcept {
+            if (alive) {
+                w.g.~Opengl();
+                api = RendererApi::None;
+                alive = false;
+            }
+        }
+
+        ContextGuardT(const ContextGuardT&) = delete;
+        ContextGuardT& operator=(const ContextGuardT&) = delete;
+    }; // struct ContextGuardT
+
+
+    using FontId = int;  // >=0
+    using AtlasId = int;  // >=0
+    enum class FontAtlasMode : io::u8 { SDF, MTSDF, DebugR, DebugRGBA };
+
+    struct FontAtlasDesc {
+        FontAtlasMode mode;
+        io::u16 pixel_height; // <=64
+        float  spread_px;     // e.g. 4..8
+        // codepoints:
+        const io::u32* codepoints;
+        io::u32 codepoint_count;
+    };
+
+    struct TextStyle {
+        // fill
+        float r = 1.f, g = 1.f, b = 1.f, a = 1.f;
+        // optional outline (works for SDF & MTSDF)
+        bool  outline = false;
+        float or_ = 0.f, og_ = 0.f, ob_ = 0.f, oa_ = 1.f;
+        float outline_px = 1.0f;   // thickness in pixels
+        float softness_px = 0.75f; // edge softness in pixels
+    };
+
+    struct TextDraw {
+        AtlasId atlas;
+        float x, y;         // top-left baseline origin
+        float scale = 1.f;
+        io::char_view text; // UTF-8
+        TextStyle style{};
+
+        float line_height = 1.0f;   // multiplier from pixel_height
+        float tab_width = 4.0f;     // tab in spaces
+        float space_between = 0.0f; // [-1..1]
+    };
+
+
+namespace internal {
+    // ------------------------------
+    // utils
+    // ------------------------------
     struct glyph_map {
         static IO_CONSTEXPR_VAR io::u32 empty_key = 0xFFFFFFFFu;
 
@@ -1408,7 +1475,6 @@ namespace glx {
             return false;
         }
     }; // struct glyph_map
-
     static inline bool utf8_next(io::char_view s, io::usize& i, io::u32& cp) noexcept {
         cp = 0;
         if (i >= s.size()) return false;
@@ -1444,176 +1510,32 @@ namespace glx {
         }
         return false;
     }
-
     static inline io::u32 pack_rgba8(float r,float g,float b,float a) noexcept {
         io::u32 R = io::f2u8(r), G = io::f2u8(g), B = io::f2u8(b), A = io::f2u8(a);
         return (A<<24) | (B<<16) | (G<<8) | (R<<0); // little-endian packed
     }
-
-    using FontId  = int;  // >=0
-    using AtlasId = int;  // >=0
-
-    enum class FontAtlasMode : io::u8 { SDF, MTSDF, DebugR, DebugRGBA };
-
-    struct FontAtlasDesc {
-        FontAtlasMode mode;
-        io::u16 pixel_height; // <=64
-        float  spread_px;     // e.g. 4..8
-
-        // codepoints:
-        const io::u32* codepoints;
-        io::u32 codepoint_count;
-    };
-
-    struct TextStyle {
-        // fill
-        float r=1.f,g=1.f,b=1.f,a=1.f;
-
-        // optional outline (works for SDF & MTSDF)
-        bool  outline = false;
-        float or_=0.f, og_=0.f, ob_=0.f, oa_=1.f;
-        float outline_px = 1.0f;   // thickness in pixels
-        float softness_px = 0.75f; // edge softness in pixels
-    };
-
-    struct TextDraw {
-        AtlasId atlas;
-        float x, y;       // top-left baseline origin
-        float scale = 1.f;
-        io::char_view text; // UTF-8
-        TextStyle style{};
-    };
-
-    struct font_atlas {
-        font_atlas() noexcept = default;
-        ~font_atlas() noexcept { destroy(); }
-
-        font_atlas(const font_atlas&) = delete;
-        font_atlas& operator=(const font_atlas&) = delete;
-
-        font_atlas(font_atlas&& o) noexcept { move_from(o); }
-        font_atlas& operator=(font_atlas&& o) noexcept {
-            if (this != &o) { destroy(); move_from(o); }
-            return *this;
-        }
-
-        void destroy() noexcept {
-            if (tex)  gl::DeleteTextures(1, &tex);
-            if (vao)  gl::DeleteVertexArrays(1, &vao);
-            if (vbo)  gl::DeleteBuffers(1, &vbo);
-            if (prog) gl::DeleteProgram(prog);
-            if (map_mem) { io::free(map_mem); map_mem=nullptr; }
-            tex=vao=vbo=prog=0;
-            map.reset();
-            glyphs.clear();
-        }
-
-        void move_from(font_atlas& o) noexcept {
-            mode=o.mode; pixel_height=o.pixel_height; spread_px=o.spread_px;
-            scale=o.scale; spread_fu=o.spread_fu;
-            atlas_side=o.atlas_side; glyph_count=o.glyph_count;
-
-            tex=o.tex; vao=o.vao; vbo=o.vbo; prog=o.prog;
-            map=o.map; map_mem=o.map_mem;
-            glyphs = io::move(o.glyphs);
-
-            o.tex=o.vao=o.vbo=o.prog=0;
-            o.map.reset();
-            o.map_mem=nullptr;
-            o.glyph_count=0;
-            o.atlas_side=0;
-        }
-        hi::FontAtlasMode mode{};
-        io::u16 pixel_height{};
-        float spread_px{};
-        float scale{};       // pixels per font unit (from stbtt_stream::FontPlan.scale)
-        float spread_fu{};   // from plan.spread_fu
-
-        io::u16 atlas_side{};
-        io::u32 glyph_count{};
-
-        // GPU
-        io::u32 tex = 0;
-        io::u32 vao = 0;
-        io::u32 vbo = 0;
-
-        io::u32 prog = 0; // shader program (one per mode is fine too)
-
-        // glyph lookup: codepoint -> index in glyphs[]
-        // (в freestanding: зроби свою flat hashmap; тут просто концепт)
-        // TODO glyph_map
-        glyph_map map;
-
-        struct glyph {
-            io::u32 codepoint;
-            io::u16 glyph_index;
-            stbtt_stream::GlyphRect rect; // atlas px
-            int advance; // font units? better store in pixels too
-            int lsb;
-            int x_min, y_min, x_max, y_max; // font units
-        };
-        io::vector<glyph> glyphs{};
-        void* map_mem{};
-    };
-
-    struct planned_glyph {
-        io::u32 codepoint;
-        io::u16 glyph_index;
-        stbtt_stream::GlyphRect rect; // atlas px
-        int x_min, y_min, x_max, y_max; // font units
-        int advance; // font units
-        int lsb;     // font units
-    };
-
-    struct planned_font_atlas {
-        hi::FontAtlasMode mode{};
-        io::u16 pixel_height{};
-        float spread_px{};
-
-        float scale{};
-        float spread_fu{};
-        io::u16 atlas_side{};
-        io::u32 glyph_count{};
-
-        io::u8* atlas_cpu{};
-        io::u32 comp{};
-        io::u32 stride{};
-
-        planned_glyph* glyphs{}; // alloc, glyph_count
-    };
-
-    static inline void planned_destroy(planned_font_atlas& p) noexcept {
-        if (p.atlas_cpu) io::free(p.atlas_cpu);
-        if (p.glyphs) io::free(p.glyphs);
-        p = {};
-    }
-
-    struct text_vertex {
-        float x, y;
-        float u, v;
-        io::u32 color_rgba;       // packed
-        io::u32 outline_rgba;     // packed
-        float outline_px;
-        float softness_px;
-    };
-
+    
+#pragma region shaders
+    // ------------------------------
+    // shader sources
+    // ------------------------------
     static const char* k_text_vs_330 =
-            "#version 330 core\n"
-            "layout(location=0) in vec2 aPos;\n"
-            "layout(location=1) in vec2 aUV;\n"
-            "layout(location=2) in vec4 aColor;\n"
-            "layout(location=3) in vec4 aOutline;\n"
-            "layout(location=4) in vec2 aParams; // outline_px, softness_px\n"
-            "out vec2 vUV;\n"
-            "out vec4 vColor;\n"
-            "out vec4 vOutline;\n"
-            "out vec2 vParams;\n"
-            "uniform vec2 uViewport; // (w,h)\n"
-            "void main(){\n"
-            "  vUV=aUV; vColor=aColor; vOutline=aOutline; vParams=aParams;\n"
-            "  vec2 ndc = vec2( (aPos.x/uViewport.x)*2.0-1.0, 1.0-(aPos.y/uViewport.y)*2.0 );\n"
-            "  gl_Position = vec4(ndc,0,1);\n"
-            "}\n";
+        "#version 330 core\n"
+        "layout(location=0) in vec2 aPos;\n"
+        "layout(location=1) in vec2 aUV;\n"
+        "layout(location=2) in vec4 aColor;\n"
+        "layout(location=3) in vec4 aOutline;\n"
+        "layout(location=4) in vec2 aParams; // outline_px, softness_px\n"
+        "out vec2 vUV;\n"
+        "out vec4 vColor;\n"
+        "out vec4 vOutline;\n"
+        "out vec2 vParams;\n"
+        "uniform vec2 uViewport; // (w,h)\n"
+        "void main(){\n"
+        "  vUV=aUV; vColor=aColor; vOutline=aOutline; vParams=aParams;\n"
+        "  vec2 ndc = vec2( (aPos.x/uViewport.x)*2.0-1.0, 1.0-(aPos.y/uViewport.y)*2.0 );\n"
+        "  gl_Position = vec4(ndc,0,1);\n"
+        "}\n";
 
     static const char* k_text_fs_sdf_330 =
         "#version 330 core\n"
@@ -1625,7 +1547,6 @@ namespace glx {
         "uniform sampler2D uTex;\n"
         "uniform float uPxRange;     // spread_px\n"
         "uniform float uAtlasSide;   // atlas_side\n"
-        "uniform int   uInvert;      // 0/1\n"
         "\n"
         "float screenPxRange(){\n"
         "  vec2 duv = fwidth(vUV);\n"
@@ -1637,7 +1558,7 @@ namespace glx {
         "void main(){\n"
         "  float pxr = screenPxRange();\n"
         "  float sd  = texture(uTex, vUV).r * 2.0 - 1.0;\n"
-        "  if (uInvert != 0) sd = -sd;\n"
+        "  sd = -sd; // ALWAYS invert\n"
         "  float dist = sd * pxr;\n"
         "\n"
         "  float w = max(fwidth(dist), vParams.y);\n"
@@ -1666,7 +1587,6 @@ namespace glx {
         "uniform sampler2D uTex;\n"
         "uniform float uPxRange;     // spread_px\n"
         "uniform float uAtlasSide;   // atlas_side\n"
-        "uniform int   uInvert;      // 0/1\n"
         "\n"
         "float screenPxRange(){\n"
         "  vec2 duv = fwidth(vUV);\n"
@@ -1682,7 +1602,7 @@ namespace glx {
         "\n"
         "  float ms = median3(t.r, t.g, t.b) * 2.0 - 1.0;\n"
         "  float ss = t.a * 2.0 - 1.0;\n"
-        "  if (uInvert != 0) { ms = -ms; ss = -ss; }\n"
+        "  ms = -ms; ss = -ss; // ALWAYS invert\n"
         "\n"
         "  float s = ss;\n"
         "\n"
@@ -1704,73 +1624,58 @@ namespace glx {
         "  }\n"
         "}\n";
 
-// Show R component as grayscale (works for R8, RGBA8)
-static const char* k_text_fs_debug_r_330 =
-            "#version 330 core\n"
-            "in vec2 vUV;\n"
-            "out vec4 Frag;\n"
-            "uniform sampler2D uTex;\n"
-            "void main(){\n"
-            "  float r = texture(uTex, vUV).r;\n"
-            "  Frag = vec4(r, r, r, 1.0);\n"
-            "}\n";
+    // Show R component as grayscale (works for R8, RGBA8)
+    static const char* k_text_fs_debug_r_330 =
+        "#version 330 core\n"
+        "in vec2 vUV;\n"
+        "out vec4 Frag;\n"
+        "uniform sampler2D uTex;\n"
+        "void main(){\n"
+        "  float r = texture(uTex, vUV).r;\n"
+        "  Frag = vec4(r, r, r, 1.0);\n"
+        "}\n";
 
-// Show RGBA directly
-static const char* k_text_fs_debug_rgba_330 =
-            "#version 330 core\n"
-            "in vec2 vUV;\n"
-            "out vec4 Frag;\n"
-            "uniform sampler2D uTex;\n"
-            "void main(){\n"
-            "  Frag = texture(uTex, vUV);\n"
-            "}\n";
+    // Show RGBA directly
+    static const char* k_text_fs_debug_rgba_330 =
+        "#version 330 core\n"
+        "in vec2 vUV;\n"
+        "out vec4 Frag;\n"
+        "uniform sampler2D uTex;\n"
+        "void main(){\n"
+        "  Frag = texture(uTex, vUV);\n"
+        "}\n";
+#pragma endregion shaders
 
-    static inline void push_glyph_quad(io::vector<text_vertex>& v,
-                                       const font_atlas& a,
-                                       const font_atlas::glyph& g,
-                                       float pen_x, float pen_y,
-                                       float scale,
-                                       io::u32 col, io::u32 ocol,
-                                       float outline_px, float softness_px) noexcept {
-        const float fu2px = a.scale * scale;
+    // ------------------------------
+    // GPU helpers
+    // ------------------------------
+    struct text_vertex {
+        float x, y;
+        float u, v;
+        io::u32 color_rgba;       // packed
+        io::u32 outline_rgba;     // packed
+        float outline_px;
+        float softness_px;
+    };
+    struct text_uniforms {
+        int uViewport = -1, uPxRange = -1, uAtlasSide = -1, uTex = -1;
 
-        const float gx0 = pen_x + (float)g.x_min * fu2px;
-        const float gy0 = pen_y - (float)g.y_max * fu2px;
-        const float gx1 = pen_x + (float)g.x_max * fu2px;
-        const float gy1 = pen_y - (float)g.y_min * fu2px;
-
-        const float inv = 1.0f / (float)a.atlas_side;
-        const float u0 = ((float)g.rect.x + 0.5f) * inv;
-        const float v0 = ((float)g.rect.y + 0.5f) * inv;
-        const float u1 = ((float)(g.rect.x + g.rect.w) - 0.5f) * inv;
-        const float v1 = ((float)(g.rect.y + g.rect.h) - 0.5f) * inv;
-
-        auto V = [&](float x,float y,float u,float v_) {
-            text_vertex tv{};
-            tv.x=x; tv.y=y; tv.u=u; tv.v=v_;
-            tv.color_rgba = col;
-            tv.outline_rgba = ocol;
-            tv.outline_px = outline_px;
-            tv.softness_px = softness_px;
-            v.push_back(tv);
-        };
-
-        V(gx0, gy0, u0, v0);
-        V(gx1, gy0, u1, v0);
-        V(gx1, gy1, u1, v1);
-
-        V(gx0, gy0, u0, v0);
-        V(gx1, gy1, u1, v1);
-        V(gx0, gy1, u0, v1);
-    }
-
-    static inline io::u32 build_text_program(hi::FontAtlasMode mode) noexcept {
+        static inline text_uniforms query(io::u32 prog) noexcept {
+            text_uniforms u{};
+            u.uViewport = gl::GetUniformLocation(prog, "uViewport");
+            u.uPxRange = gl::GetUniformLocation(prog, "uPxRange");
+            u.uAtlasSide = gl::GetUniformLocation(prog, "uAtlasSide");
+            u.uTex = gl::GetUniformLocation(prog, "uTex");
+            return u;
+        }
+    };
+    IO_NODISCARD static inline io::u32 build_text_program(FontAtlasMode mode) noexcept {
         io::u32 vs=0, fs=0, prog=0;
         if (!gl::Shader::compile_shader(vs, gl::ShaderType::VertexShader, k_text_vs_330)) return 0;
         const char* fsrc =
-                (mode==hi::FontAtlasMode::SDF)       ? k_text_fs_sdf_330 :
-                (mode==hi::FontAtlasMode::MTSDF)     ? k_text_fs_mtsdf_330 :
-                (mode==hi::FontAtlasMode::DebugR)    ? k_text_fs_debug_r_330 :
+                (mode==FontAtlasMode::SDF)       ? k_text_fs_sdf_330 :
+                (mode==FontAtlasMode::MTSDF)     ? k_text_fs_mtsdf_330 :
+                (mode==FontAtlasMode::DebugR)    ? k_text_fs_debug_r_330 :
                                                       k_text_fs_debug_rgba_330;
         if (!gl::Shader::compile_shader(fs, gl::ShaderType::FragmentShader, fsrc)) { gl::DeleteShader(vs); return 0; }
         if (!gl::Shader::link_program(prog, vs, fs)) { gl::DeleteShader(vs); gl::DeleteShader(fs); return 0; }
@@ -1778,309 +1683,130 @@ static const char* k_text_fs_debug_rgba_330 =
         gl::DeleteShader(fs);
         return prog;
     }
+    IO_NODISCARD static inline io::u32 gl_upload_atlas(io::u16 side, FontAtlasMode mode, const io::u8* pixels) noexcept {
+        const int level = 0;
+        const int w = (int)side;
+        const int h = (int)side;
+        const bool is_r = (mode == FontAtlasMode::SDF) || (mode == FontAtlasMode::DebugR);
+        const gl::TexFormat fmt = is_r ? gl::TexFormat::R : gl::TexFormat::RGBA;
+        const gl::InternalFormat int_fmt = is_r ? gl::InternalFormat::R8 : gl::InternalFormat::RGBA8;
 
-    static inline void setup_text_vao(io::u32& out_vao, io::u32& out_vbo) noexcept {
-        gl::GenVertexArrays(1, &out_vao);
-        gl::GenBuffers(1, &out_vbo);
-        
-        gl::BindVertexArray(out_vao);
-        gl::BindBuffer(gl::BufferTarget::ArrayBuffer, out_vbo);
-        
-        const int stride = (int)sizeof(text_vertex);
-        
-        // aPos: vec2 float at loc0
-        gl::VertexAttribPointer(0, 2, gl::DrawElementsType::Float, false, stride, (void*)offsetof(text_vertex,x));
-        gl::EnableVertexAttribArray(0);
-        
-        // aUV: vec2 float loc1
-        gl::VertexAttribPointer(1, 2, gl::DrawElementsType::Float, false, stride, (void*)offsetof(text_vertex,u));
-        gl::EnableVertexAttribArray(1);
-        
-        // aColor: 4x u8 normalized loc2 (packed RGBA8)
-        gl::VertexAttribPointer(2, 4, gl::DrawElementsType::UnsignedByte, true, stride, (void*)offsetof(text_vertex,color_rgba));
-        gl::EnableVertexAttribArray(2);
-        
-        // aOutline: 4x u8 normalized loc3
-        gl::VertexAttribPointer(3, 4, gl::DrawElementsType::UnsignedByte, true, stride, (void*)offsetof(text_vertex,outline_rgba));
-        gl::EnableVertexAttribArray(3);
-        
-        // aParams: vec2 float loc4 (outline_px, softness_px)
-        gl::VertexAttribPointer(4, 2, gl::DrawElementsType::Float, false, stride, (void*)offsetof(text_vertex,outline_px));
-        gl::EnableVertexAttribArray(4);
-        
-        gl::BindVertexArray(0);
-        gl::BindBuffer(gl::BufferTarget::ArrayBuffer, 0);
-    }
+        io::u32 tex = 0;
+        gl::GenTextures(1, &tex);
+        gl::BindTexture(gl::TexTarget::Tex2D, tex);
 
-    // --- CRTP base ---
-    template <typename Derived>
-    struct Window : public IWindow {
-    public:
-        union { native::Opengl g; };
+        gl::TexParameteri(gl::TexTarget::Tex2D, gl::TexParam::MinFilter, gl::MinifyingFilter::Linear);
+        gl::TexParameteri(gl::TexTarget::Tex2D, gl::TexParam::MagFilter, gl::MagnifyingFilter::Linear);
+        gl::TexParameteri(gl::TexTarget::Tex2D, gl::TexParam::WrapS, gl::TexWrap::ClampToEdge);
+        gl::TexParameteri(gl::TexTarget::Tex2D, gl::TexParam::WrapT, gl::TexWrap::ClampToEdge);
 
-        explicit inline Window(int w = 440, int h = 320, bool shown = true, bool bordless = false) noexcept;
-        inline ~Window() noexcept;
+        if (is_r) gl::PixelStorei(gl::UNPACK_ALIGNMENT, 1);
+        gl::TexImage2D(gl::TexTarget::Tex2D, level, int_fmt, w, h, 0, fmt, gl::DataType::UnsignedByte, pixels);
+        if (is_r) gl::PixelStorei(gl::UNPACK_ALIGNMENT, 4);
 
-        // Non-copyable, non-movable
-        Window(const Window&) = delete;
-        Window& operator=(const Window&) = delete;
-        Window(Window&&) = delete;
-        Window& operator=(Window&&) = delete;
-
-        Derived* self() noexcept { return static_cast<Derived*>(this); }
-
-        // --- Implement interface using CRTP dispatch ---
-        inline void onRender() noexcept override { }
-        inline void onError(Error e, AboutError ae)       noexcept override { }
-        inline void onScroll(float deltaX, float deltaY)  noexcept override { }
-        inline void onWindowResize(int width, int height) noexcept override { }
-        inline void onMouseMove(int x, int y)  noexcept override { }
-        inline void onKeyDown(Key k)           noexcept override { }
-        inline void onKeyUp(Key k)             noexcept override { }
-        inline void onFocusChange(bool gained) noexcept override { }
-        IO_NODISCARD RendererApi api() const noexcept override { return _renderer_api; }
-
-        // Getters
-        IO_NODISCARD inline       native::Opengl& opengl()       noexcept override { return g; }
-        IO_NODISCARD inline const native::Opengl& opengl() const noexcept override { return g; }
-        IO_NODISCARD inline       native::Window& native()       noexcept override { return _native_window; }
-        IO_NODISCARD inline const native::Window& native() const noexcept override { return _native_window; }
-        IO_NODISCARD inline int width() const noexcept override { return _width; }
-        IO_NODISCARD inline int height() const noexcept override { return _height; }
-        inline void onGeometryChange(int w, int h) noexcept override;
-
-    public:
-        IO_NODISCARD inline void setApiAlive(RendererApi api, bool alive) noexcept override { _renderer_api = api; _renderer_alive = alive; };
-        IO_NODISCARD inline bool PollEvents() const noexcept {
-            // const Window<Derived>* -> IWindow&
-            auto* self_nc = const_cast<Window<Derived>*>(this);
-            return native().PollEvents(static_cast<IWindow&>(*self_nc));
-        }
-        inline void Render() noexcept override;
-        inline void SwapBuffers() const noexcept;
-
-        // ---- Font files (paths only) ----
-        FontId LoadFont(io::char_view ttf_path) noexcept; // stores path, checks file exists
-        // ---- Plan/Build atlas (load TTF bytes, plan, build, upload texture) ----
-        AtlasId GenerateFontAtlas(FontId font_id, const hi::FontAtlasDesc& desc) noexcept;
-        // ---- Immediate text ----
-        void DrawText(const TextDraw& d) noexcept;
-        // Call once per frame inside Render() (or end of Render())
-        void FlushText() noexcept;
-
-        // --- Setters ---
-        inline void setShow(bool value) const noexcept { native().setShow(value); }
-        inline void setTitle(io::char_view new_title) const noexcept { native().setTitle(new_title); }
-        inline void setFullscreen(bool value) const noexcept { native().setFullscreen(value); }
-        inline void setCursorVisible(bool value) const noexcept { native().setCursorVisible(value); }
-        void setGlCore(io::u8 major, io::u8 minor) noexcept;
-
-        inline io::u16 getAtlasSide(AtlasId id) const noexcept { return (id<0) ? 0 : (id>=(int)_atlases.size()) ? 0 : _atlases[id].atlas_side;   }
-
-    private:
-        native::Window _native_window;
-        int _width;
-        int _height;
-
-        RendererApi _renderer_api{ RendererApi::None };
-        bool _renderer_alive{ false };
-        
-        struct text_cmd {
-            AtlasId atlas;
-            io::u32 first;
-            io::u32 count;
-        };
-
-        io::vector<io::string> _font_paths;
-        io::vector<font_atlas> _atlases;
-            
-        io::vector<text_vertex> _text_verts;
-        io::vector<text_cmd>    _text_cmds;
-    }; // struct Window
-
-
-
-    template <typename Derived>
-    Window<Derived>::Window(int w, int h, bool shown, bool bordless) noexcept
-        : _width{ w }, _height{ h }, _native_window{ *this,w,h,shown,bordless } { }
-
-    template <typename Derived>
-    inline Window<Derived>::~Window() noexcept {
-        if (_renderer_alive) {
-            switch (api()) {
-            case RendererApi::Opengl: g.~Opengl(); break;
-            case RendererApi::Vulkan: break; // @TODO
-            default: break;
-            } // switch
-            _renderer_alive = false;
-        }
-    }
-
-#ifdef IO_IMPLEMENTATION
-    template <typename Derived>
-    inline void Window<Derived>::onGeometryChange(int w, int h) noexcept {
-        _width=w; _height=h; // Update window size
-        switch (api()) { // Switch between APIs
-        case RendererApi::Opengl:
-#ifdef _WIN32
-            io::sleep_ms(7); // Hack: slow down the program.
-#endif
-            gl::Viewport(0, 0, w, h); // Call viewport 
-            break;
-        default:
-            break;
-        } // switch renderer
-
-        onWindowResize(w, h); // Call user defined callback
-        onRender(); // Rerender the window
-        SwapBuffers();
-    } // onGeometryChange
-
-    template <typename Derived>
-    inline void Window<Derived>::Render() noexcept {
-        if (!_renderer_alive) return;
-        switch (api()) {
-        case RendererApi::Opengl: g.Render(*this); break;
-        case RendererApi::Vulkan: break; // @TODO
-        } // switch
-    } // render
-
-    template <typename Derived>
-    inline void Window<Derived>::SwapBuffers() const noexcept {
-        if (!_renderer_alive) return;
-        switch (api())
-        {
-        case RendererApi::Opengl: g.SwapBuffers(*this); break;
-        case RendererApi::Vulkan:   break; // @TODO
-        default: break;
-        } // switch
-    } // render
-
-    template <typename Derived>
-    void Window<Derived>::setGlCore(io::u8 major, io::u8 minor) noexcept {
-        if (_renderer_api == RendererApi::Opengl) return;
-        if (_renderer_alive) { // Destroy old renderer
-            switch (_renderer_api) {
-            case RendererApi::Opengl: g.~Opengl(); break;
-            case RendererApi::Vulkan: break; // @TODO
-            }
-        }
-        new (&g) native::Opengl(major, minor);
-        Error err = Error::Opengl;
-        AboutError about = g.CreateContext(*this);
-        if (about != AboutError::None) {
-            onError(Error::Opengl, about);
-            g.~Opengl();
-            return;
-        }
-        gl::Viewport(0, 0, _width, _height);
-    } // set_api
-#endif // IO_IMPLEMENTATION
-
-    template<typename Derived>
-    FontId Window<Derived>::LoadFont(io::char_view ttf_path) noexcept {
-        if (!fs::exists(ttf_path)) return -1;
-        if (!_font_paths.push_back(io::string{ ttf_path })) return -1;
-        return (FontId)(_font_paths.size() - 1);
-    }
-
-    
-
-    template<typename Derived>
-    void Window<Derived>::DrawText(const TextDraw& d) noexcept {
-        if (d.atlas < 0 || (io::u32)d.atlas >= _atlases.size()) return;
-        const font_atlas& A = _atlases[(io::u32)d.atlas];
-
-        const io::u32 col  = pack_rgba8(d.style.r,  d.style.g,  d.style.b,  d.style.a);
-        const io::u32 ocol = d.style.outline
-            ? pack_rgba8(d.style.or_, d.style.og_, d.style.ob_, d.style.oa_)
-            : 0u;
-
-        const io::u32 first = (io::u32)_text_verts.size();
-
-        // d.x/d.y = TOP-LEFT in pixels
-        float pen_x = d.x;
-        float pen_y = d.y + (float)A.pixel_height * d.scale; // convert TOP->BASELINE
-
-        io::usize i = 0;
-        io::u32 cp = 0;
-        while (utf8_next(d.text, i, cp)) {
-            if (cp == '\n') { 
-                pen_x = d.x; 
-                pen_y += (float)A.pixel_height * d.scale; // line height
-                continue; 
-            }
-            else if (cp == ' ') {
-                // space-length as 1/2 line-height
-                pen_x += (float)A.pixel_height * d.scale * 0.5f;
-                continue;
-            }
-            io::u32 gi = 0;
-            if (!A.map.find(cp, gi)) continue;
-
-            const auto& G = A.glyphs[gi];
-            push_glyph_quad(_text_verts, A, G, pen_x, pen_y, d.scale, col, ocol, d.style.outline_px, d.style.softness_px);
-            pen_x += (float)G.advance * A.scale * d.scale;
-        }
-
-        const io::u32 count = (io::u32)_text_verts.size() - first;
-        if (count == 0) return;
-        _text_cmds.push_back(text_cmd{ d.atlas, first, count });
-    }
-
-    template<typename Derived>
-    void Window<Derived>::FlushText() noexcept {
-        if (_text_cmds.empty() || _text_verts.empty()) return;
-        // upload once
-        // NOTE: for first time, allocate VBO large enough; simplest: BufferData each frame.
-        gl::BindBuffer(gl::BufferTarget::ArrayBuffer, _atlases[(io::u32)_text_cmds[0].atlas].vbo);
-        gl::BufferData(gl::BufferTarget::ArrayBuffer,
-                       (intptr_t)(_text_verts.size() * sizeof(text_vertex)),
-                       _text_verts.data(),
-                       gl::BufferUsage::DynamicDraw);
-
-        // state
-        gl::Enable(gl::Capability::Blend);
-        gl::BlendFunc(gl::BlendFactor::SrcAlpha, gl::BlendFactor::OneMinusSrcAlpha);
-
-        const float vw = (float)width();
-        const float vh = (float)height();
-
-        // uniforms.
-        // We'll set uViewport + uPxRange + uTex=0
-        for (io::u32 ci=0; ci<_text_cmds.size(); ++ci) {
-            const text_cmd& cmd = _text_cmds[ci];
-            font_atlas& A = _atlases[(io::u32)cmd.atlas];
-
-            gl::UseProgram(A.prog);
-            gl::BindVertexArray(A.vao);
-
-            gl::ActiveTexture(gl::TexUnit::_0);
-            gl::BindTexture(gl::TexTarget::Tex2D, A.tex);
-
-            const int loc_vp = gl::GetUniformLocation(A.prog, "uViewport");
-            const int loc_px = gl::GetUniformLocation(A.prog, "uPxRange");
-            const int loc_tex = gl::GetUniformLocation(A.prog, "uTex");
-            const int loc_inv = gl::GetUniformLocation(A.prog, "uInvert");
-            const int loc_side = gl::GetUniformLocation(A.prog, "uAtlasSide");
-
-            if (loc_vp >= 0) gl::Uniform2f(loc_vp, vw, vh);
-            if (loc_px >= 0) gl::Uniform1f(loc_px, A.spread_px);
-            if (loc_tex >= 0) gl::Uniform1i(loc_tex, 0);
-            if (loc_inv >= 0) gl::Uniform1i(loc_inv, 1);
-            if (loc_side >= 0) gl::Uniform1f(loc_side, (float)A.atlas_side);
-
-            gl::DrawArrays(gl::PrimitiveMode::Triangles, (int)cmd.first, (int)cmd.count);
-        }
-
-        gl::BindVertexArray(0);
         gl::BindTexture(gl::TexTarget::Tex2D, 0);
 
-        _text_cmds.clear();
-        _text_verts.clear();
+        return tex;
     }
 
-    IO_NODISCARD static bool plan_font(io::char_view ttf_path, const hi::FontAtlasDesc& desc, planned_font_atlas& out) noexcept {
+    // ------------------------------
+    // CPU planning
+    // ------------------------------
+    struct font_atlas {
+        font_atlas() noexcept = default;
+        ~font_atlas() noexcept { destroy(); }
+
+        font_atlas(const font_atlas&) = delete;
+        font_atlas& operator=(const font_atlas&) = delete;
+
+        font_atlas(font_atlas&& o) noexcept { move_from(o); }
+        font_atlas& operator=(font_atlas&& o) noexcept {
+            if (this != &o) { destroy(); move_from(o); }
+            return *this;
+        }
+
+        void destroy() noexcept {
+            if (tex)  gl::DeleteTextures(1, &tex);
+            if (prog) gl::DeleteProgram(prog);
+            if (map_mem) { io::free(map_mem); map_mem = nullptr; }
+            tex = prog = 0;
+            map.reset();
+            glyphs.clear();
+        }
+
+        void move_from(font_atlas& o) noexcept {
+            mode = o.mode; pixel_height = o.pixel_height; spread_px = o.spread_px;
+            scale = o.scale; spread_fu = o.spread_fu;
+            atlas_side = o.atlas_side; glyph_count = o.glyph_count;
+
+            tex = o.tex; prog = o.prog; uniforms = o.uniforms;
+            map = o.map; map_mem = o.map_mem;
+            glyphs = io::move(o.glyphs);
+
+            o.tex = o.prog = 0;
+            o.uniforms = {};
+            o.map.reset();
+            o.map_mem = nullptr;
+            o.glyph_count = 0;
+            o.atlas_side = 0;
+        }
+        FontAtlasMode mode{};
+        io::u16 pixel_height{};
+        float spread_px{};
+        float scale{};       // pixels per font unit (from stbtt_stream::FontPlan.scale)
+        float spread_fu{};   // from plan.spread_fu
+
+        io::u16 atlas_side{};
+        io::u32 glyph_count{};
+
+        // GPU
+        io::u32 tex = 0;
+        io::u32 prog = 0; // shader program (one per mode is fine too)
+
+        glyph_map map;  // glyph lookup: codepoint -> index in glyphs[]
+
+        struct glyph {
+            io::u32 codepoint;
+            io::u16 glyph_index;
+            stbtt_stream::GlyphRect rect; // atlas px
+            int advance; // font units? better store in pixels too
+            int lsb;
+            int x_min, y_min, x_max, y_max; // font units
+        };
+        io::vector<glyph> glyphs{};
+        void* map_mem{};
+        text_uniforms uniforms{};
+    };
+    struct planned_glyph {
+        io::u32 codepoint;
+        io::u16 glyph_index;
+        stbtt_stream::GlyphRect rect; // atlas px
+        int x_min, y_min, x_max, y_max; // font units
+        int advance; // font units
+        int lsb;     // font units
+    };
+    struct planned_font_atlas {
+        FontAtlasMode mode{};
+        io::u16 pixel_height{};
+        float spread_px{};
+
+        float scale{};
+        float spread_fu{};
+        io::u16 atlas_side{};
+        io::u32 glyph_count{};
+
+        io::u8* atlas_cpu{};
+        io::u32 comp{};
+        io::u32 stride{};
+
+        planned_glyph* glyphs{}; // alloc, glyph_count
+    };
+    static inline void planned_destroy(planned_font_atlas& p) noexcept {
+        if (p.atlas_cpu) io::free(p.atlas_cpu);
+        if (p.glyphs) io::free(p.glyphs);
+        p = {};
+    }
+    IO_NODISCARD static bool plan_font(io::char_view ttf_path, const FontAtlasDesc& desc, planned_font_atlas& out) noexcept {
         out = {};
         if (!desc.codepoints || desc.codepoint_count == 0) return false;
 
@@ -2094,7 +1820,7 @@ static const char* k_text_fs_debug_rgba_330 =
         if (!font.ReadBytes(reinterpret_cast<uint8_t*>(ttf_bytes.data()))) return false;
 
         stbtt_stream::PlanInput in{};
-        const bool want_sdf = (desc.mode == hi::FontAtlasMode::SDF) || (desc.mode == hi::FontAtlasMode::DebugR);
+        const bool want_sdf = (desc.mode == FontAtlasMode::SDF) || (desc.mode == FontAtlasMode::DebugR);
         in.mode = want_sdf ? stbtt_stream::DfMode::SDF : stbtt_stream::DfMode::MTSDF;
         in.pixel_height = desc.pixel_height;
         in.spread_px = desc.spread_px;
@@ -2162,35 +1888,8 @@ static const char* k_text_fs_debug_rgba_330 =
         out.glyphs = glyphs;
         return true;
     }
-    
-    IO_NODISCARD static inline io::u32 gl_upload_atlas(io::u16 side, hi::FontAtlasMode mode, const io::u8* pixels) noexcept {
-        const int level = 0;
-        const int w = (int)side;
-        const int h = (int)side;
-        const bool is_r = (mode == hi::FontAtlasMode::SDF) || (mode == hi::FontAtlasMode::DebugR);
-        const gl::TexFormat fmt = is_r ? gl::TexFormat::R : gl::TexFormat::RGBA;
-        const gl::InternalFormat int_fmt = is_r ? gl::InternalFormat::R8 : gl::InternalFormat::RGBA8;
-
-        io::u32 tex = 0;
-        gl::GenTextures(1, &tex);
-        gl::BindTexture(gl::TexTarget::Tex2D, tex);
-
-        gl::TexParameteri(gl::TexTarget::Tex2D, gl::TexParam::MinFilter, gl::MinifyingFilter::Linear);
-        gl::TexParameteri(gl::TexTarget::Tex2D, gl::TexParam::MagFilter, gl::MagnifyingFilter::Linear);
-        gl::TexParameteri(gl::TexTarget::Tex2D, gl::TexParam::WrapS, gl::TexWrap::ClampToEdge);
-        gl::TexParameteri(gl::TexTarget::Tex2D, gl::TexParam::WrapT, gl::TexWrap::ClampToEdge);
-
-        if (is_r) gl::PixelStorei(gl::UNPACK_ALIGNMENT, 1);
-        gl::TexImage2D(gl::TexTarget::Tex2D, level, int_fmt, w, h, 0, fmt, gl::DataType::UnsignedByte, pixels);
-        if (is_r) gl::PixelStorei(gl::UNPACK_ALIGNMENT, 4);
-
-        gl::BindTexture(gl::TexTarget::Tex2D, 0);
-
-        return tex;
-    }
-
-    IO_NODISCARD static inline AtlasId gen_font_atlas(io::vector<hi::font_atlas>& atlases, const planned_font_atlas& p) noexcept {
-        hi::font_atlas A{};
+    IO_NODISCARD static inline AtlasId gen_font_atlas(io::vector<font_atlas>& atlases, const planned_font_atlas& p) noexcept {
+        font_atlas A{};
         A.mode = p.mode;
         A.pixel_height = p.pixel_height;
         A.spread_px = p.spread_px;
@@ -2204,14 +1903,12 @@ static const char* k_text_fs_debug_rgba_330 =
         if (!A.glyphs.reserve(p.glyph_count)) { if (A.tex) gl::DeleteTextures(1, &A.tex); return -1; }
         A.prog = build_text_program(p.mode);
         if (!A.prog) { if (A.tex) gl::DeleteTextures(1, &A.tex); return -1; }
-        setup_text_vao(A.vao, A.vbo);
+        A.uniforms = text_uniforms::query(A.prog);
 
         io::u32 cap = 1;
         while (cap < p.glyph_count * 2u) cap <<= 1u;
         void* map_mem = io::alloc((size_t)cap * sizeof(glyph_map::slot));
         if (!map_mem || !A.map.init(map_mem, cap)) {
-            if (A.vao) gl::DeleteVertexArrays(1, &A.vao);
-            if (A.vbo) gl::DeleteBuffers(1, &A.vbo);
             if (A.prog) gl::DeleteProgram(A.prog);
             if (A.tex) gl::DeleteTextures(1, &A.tex);
             io::free(map_mem);
@@ -2220,7 +1917,7 @@ static const char* k_text_fs_debug_rgba_330 =
 
         for (io::u32 i = 0; i < p.glyph_count; ++i) {
             const planned_glyph& pg = p.glyphs[i];
-            hi::font_atlas::glyph G{};
+            font_atlas::glyph G{};
             G.codepoint = pg.codepoint;
             G.glyph_index = pg.glyph_index;
             G.rect = pg.rect;
@@ -2237,16 +1934,429 @@ static const char* k_text_fs_debug_rgba_330 =
         if (!atlases.push_back(io::move(A))) return -1;
         return (AtlasId)(atlases.size() - 1);
     }
+    template<typename... Scripts>
+    static bool collect_codepoints(io::char_view ttf_path, const FontAtlasDesc& desc,
+                                   io::vector<io::u32>& out, Scripts... scripts) noexcept {
+        out.clear();
+
+        // 0) read font bytes
+        io::string ttf_bytes{};
+        {
+            fs::File f(ttf_path, io::OpenMode::Read);
+            if (!f.is_open() || !f.read_all(ttf_bytes) || ttf_bytes.empty()) return false;
+        }
+        stbtt_stream::Font font;
+        if (!font.ReadBytes(reinterpret_cast<uint8_t*>(ttf_bytes.data()))) return false;
+
+        // 1) scripts -> count
+        const io::u32 script_count = (io::u32)stbtt_codepoints::PlanGlyphs(font, scripts...);
+
+        // 2) reserve total (scripts + desc)
+        const io::u32 extra = (desc.codepoints && desc.codepoint_count) ? desc.codepoint_count : 0;
+        if (!out.reserve((io::usize)script_count + (io::usize)extra)) return false;
+
+        // 3) scripts -> fill
+        io::u32 at = 0;
+        auto sink = [&](io::u32 cp, int /*glyph*/) {
+            (void)at;
+            (void)out.push_back(cp);
+            ++at;
+        };
+        int dummy[] = { (stbtt_codepoints::CollectGlyphs(font, sink, scripts), 0)... };
+        (void)dummy;
+
+        // 4) append desc.codepoints
+        if (extra) {
+            for (io::u32 i = 0; i < desc.codepoint_count; ++i)
+                out.push_back(desc.codepoints[i]);
+        }
+
+        // 5) optional: unique
+        // 
+        // PSEUDOCODE
+        // io::sort(out.begin(), out.end());
+        // out.erase(io::unique(out.begin(), out.end()), out.end());
+
+        return !out.empty();
+    }
+
+    // ------------------------------
+    // text batching
+    // ------------------------------
+    static inline void push_glyph_quad(io::vector<text_vertex>& v, const font_atlas& a,
+                                       const font_atlas::glyph& g,
+                                       float pen_x, float pen_y, float scale,
+                                       io::u32 col, io::u32 ocol,
+                                       float outline_px, float softness_px) noexcept {
+        const float fu2px = a.scale * scale;
+
+        const float gx0 = pen_x + (float)g.x_min * fu2px;
+        const float gy0 = pen_y - (float)g.y_max * fu2px;
+        const float gx1 = pen_x + (float)g.x_max * fu2px;
+        const float gy1 = pen_y - (float)g.y_min * fu2px;
+
+        const float inv = 1.0f / (float)a.atlas_side;
+        const float u0 = ((float)g.rect.x + 0.5f) * inv;
+        const float v0 = ((float)g.rect.y + 0.5f) * inv;
+        const float u1 = ((float)(g.rect.x + g.rect.w) - 0.5f) * inv;
+        const float v1 = ((float)(g.rect.y + g.rect.h) - 0.5f) * inv;
+
+        auto V = [&](float x, float y, float u, float v_) {
+            text_vertex tv{};
+            tv.x = x; tv.y = y; tv.u = u; tv.v = v_;
+            tv.color_rgba = col;
+            tv.outline_rgba = ocol;
+            tv.outline_px = outline_px;
+            tv.softness_px = softness_px;
+            v.push_back(tv);
+        };
+
+        V(gx0, gy0, u0, v0);
+        V(gx1, gy0, u1, v0);
+        V(gx1, gy1, u1, v1);
+
+        V(gx0, gy0, u0, v0);
+        V(gx1, gy1, u1, v1);
+        V(gx0, gy1, u0, v1);
+    }
+    // key for batching: atlas id is enough (because atlas owns tex+prog+mode+spread)
+    struct text_batch {
+        AtlasId atlas = -1;
+        io::u32 first = 0;
+        io::u32 count = 0;
+    };
+
+    // One-frame accumulator
+    struct text_queue {
+        io::vector<text_vertex> verts;
+        io::vector<text_batch>  batches;
+
+        // previous batch state:
+        AtlasId cur_atlas = -1;
+        io::u32 cur_first = 0;
+
+        inline void clear() noexcept { verts.clear(); batches.clear(); cur_atlas = -1; cur_first = 0; }
+
+        inline void begin_batch(AtlasId atlas) noexcept {
+            if (cur_atlas == atlas) return;
+            // close previous
+            if (cur_atlas != -1) {
+                const io::u32 cnt = (io::u32)verts.size() - cur_first;
+                if (cnt) batches.push_back(text_batch{ cur_atlas, cur_first, cnt });
+            }
+            cur_atlas = atlas;
+            cur_first = (io::u32)verts.size();
+        }
+
+        inline void end() noexcept {
+            if (cur_atlas != -1) {
+                const io::u32 cnt = (io::u32)verts.size() - cur_first;
+                if (cnt) batches.push_back(text_batch{ cur_atlas, cur_first, cnt });
+            }
+            cur_atlas = -1;
+            cur_first = 0;
+        }
+    };
+    
+    } // namespace internal
+
+    // --- CRTP base ---
+    template <typename Derived>
+    struct Window : public IWindow {
+    public:
+        union { native::Opengl g; };
+
+        explicit inline Window(int w = 440, int h = 320, bool shown = true, bool bordless = false) noexcept
+            : _width{ w }, _height{ h }, _native_window{ *this,w,h,shown,bordless }, _ctx{ *this, 3, 3 } 
+        {
+            static const gl::Attr attrs[] = {
+                gl::AttrOf<float>(2),  // pos
+                gl::AttrOf<float>(2),  // uv
+                gl::AttrOf<io::u8>(4, true), // color (norm)
+                gl::AttrOf<io::u8>(4, true), // outline (norm)
+                gl::AttrOf<float>(2),  // params
+            };
+            gl::MeshBinder::setup(_text_vao, _text_vbo, io::view<const gl::Attr>(attrs, sizeof(attrs) / sizeof(attrs[0])));
+        }
+        inline ~Window() noexcept { }
+
+        // Non-copyable, non-movable
+        Window(const Window&) = delete;
+        Window& operator=(const Window&) = delete;
+        Window(Window&&) = delete;
+        Window& operator=(Window&&) = delete;
+
+        Derived* self() noexcept { return static_cast<Derived*>(this); }
+
+        // --- Implement interface using CRTP dispatch ---
+        inline void onRender() noexcept override { }
+        inline void onError(Error e, AboutError ae)       noexcept override { }
+        inline void onScroll(float deltaX, float deltaY)  noexcept override { }
+        inline void onWindowResize(int width, int height) noexcept override { }
+        inline void onMouseMove(int x, int y)  noexcept override { }
+        inline void onKeyDown(Key k)           noexcept override { }
+        inline void onKeyUp(Key k)             noexcept override { }
+        inline void onFocusChange(bool gained) noexcept override { }
+
+        // Getters
+        IO_NODISCARD inline RendererApi api() const noexcept override { return _ctx.api; }
+        IO_NODISCARD inline       native::Opengl& opengl()       noexcept override { return g; }
+        IO_NODISCARD inline const native::Opengl& opengl() const noexcept override { return g; }
+        IO_NODISCARD inline       native::Window& native()       noexcept override { return _native_window; }
+        IO_NODISCARD inline const native::Window& native() const noexcept override { return _native_window; }
+        IO_NODISCARD inline int width() const noexcept override { return _width; }
+        IO_NODISCARD inline int height() const noexcept override { return _height; }
+        inline void onGeometryChange(int w, int h) noexcept override;
+
+    public:
+        IO_NODISCARD inline bool PollEvents() const noexcept {
+            // const Window<Derived>* -> IWindow&
+            auto* self_nc = const_cast<Window<Derived>*>(this);
+            return native().PollEvents(static_cast<IWindow&>(*self_nc));
+        }
+        inline void Render() noexcept override;
+        inline void SwapBuffers() const noexcept;
+
+        // Font files: stores path, checks file exists
+        FontId LoadFont(io::char_view ttf_path) noexcept; // 
+        // Plan/Build atlas (load TTF bytes, plan, build, upload texture)
+        AtlasId GenerateFontAtlas(FontId font_id, const FontAtlasDesc& desc) noexcept;
+        template<typename... Scripts>
+        AtlasId GenerateFontAtlas(FontId font_id, const FontAtlasDesc& desc, Scripts... scripts) noexcept;
+        // Immediate text
+        void DrawText(const TextDraw& d) noexcept;
+        // Call once per frame inside Render() (or end of Render())
+        void FlushText() noexcept;
+
+        // --- Setters ---
+        inline void setShow(bool value) const noexcept { native().setShow(value); }
+        inline void setTitle(io::char_view new_title) const noexcept { native().setTitle(new_title); }
+        inline void setFullscreen(bool value) const noexcept { native().setFullscreen(value); }
+        inline void setCursorVisible(bool value) const noexcept { native().setCursorVisible(value); }
+
+        inline io::u16 getAtlasSide(AtlasId id) const noexcept { return (id<0) ? 0 : (id>=(int)_atlases.size()) ? 0 : _atlases[id].atlas_side;   }
+
+    private:
+        native::Window _native_window;
+        int _width;
+        int _height;
+        ContextGuardT<Window> _ctx; // RAII context
+
+        bool _text_mesh_ready = false;
+        
+        struct text_cmd {
+            AtlasId atlas;
+            io::u32 first;
+            io::u32 count;
+        };
+
+        gl::VertexArray _text_vao;
+        gl::Buffer      _text_vbo{ gl::BufferTarget::ArrayBuffer };
+
+        io::vector<io::string> _font_paths;
+        io::vector<internal::font_atlas> _atlases;
+            
+        internal::text_queue _textq;
+    }; // struct Window
+
+#ifdef IO_IMPLEMENTATION
+    template <typename Derived>
+    inline void Window<Derived>::onGeometryChange(int w, int h) noexcept {
+        _width=w; _height=h; // Update window size
+        switch (api()) { // Switch between APIs
+        case RendererApi::Opengl:
+#ifdef _WIN32
+            io::sleep_ms(7); // Hack: slow down the program.
+#endif
+            gl::Viewport(0, 0, w, h); // Call viewport 
+            break;
+        default:
+            break;
+        } // switch renderer
+
+        onWindowResize(w, h); // Call user defined callback
+        onRender(); // Rerender the window
+        SwapBuffers();
+    } // onGeometryChange
 
     template <typename Derived>
-    AtlasId Window<Derived>::GenerateFontAtlas(FontId font_id, const hi::FontAtlasDesc& desc) noexcept {
+    inline void Window<Derived>::Render() noexcept {
+        if (!_ctx.alive) return;
+        switch (api()) {
+        case RendererApi::Opengl: g.Render(*this); break;
+        default: break;
+        } // switch
+    } // render
+
+    template <typename Derived>
+    inline void Window<Derived>::SwapBuffers() const noexcept {
+        if (!_ctx.alive) return;
+        switch (api())
+        {
+        case RendererApi::Opengl: g.SwapBuffers(*this); break;
+        default: break;
+        } // switch
+    } // render
+#endif // IO_IMPLEMENTATION
+
+    template<typename Derived>
+    FontId Window<Derived>::LoadFont(io::char_view ttf_path) noexcept {
+        if (!fs::exists(ttf_path)) return -1;
+        if (!_font_paths.push_back(io::string{ ttf_path })) return -1;
+        return (FontId)(_font_paths.size() - 1);
+    }
+
+    
+
+    template<typename Derived>
+    void Window<Derived>::DrawText(const TextDraw& d) noexcept {
+        if (d.atlas < 0 || (io::u32)d.atlas >= _atlases.size()) return;
+        const internal::font_atlas& A = _atlases[(io::u32)d.atlas];
+
+        // batch switch
+        _textq.begin_batch(d.atlas);
+
+        const io::u32 col = hi::internal::pack_rgba8(d.style.r, d.style.g, d.style.b, d.style.a);
+        const io::u32 ocol = d.style.outline
+            ? hi::internal::pack_rgba8(d.style.or_, d.style.og_, d.style.ob_, d.style.oa_)
+            : 0u;
+
+        const float scale = d.scale;
+        const float line_px = (float)A.pixel_height * scale * ((d.line_height <= 0.f) ? 1.f : d.line_height);
+
+        // "space" як і було (пів line-height), але узгоджено з line_height
+        const float space_px = line_px * 0.5f;
+
+        // таб = N пробілів
+        const float tab_px = space_px * ((d.tab_width <= 0.f) ? 4.f : d.tab_width);
+
+        // space_between: [-1..1] => [-space_px .. +space_px]
+        float sb = d.space_between;
+        if (sb < -1.f) sb = -1.f;
+        if (sb > 1.f) sb = 1.f;
+        const float extra_px = sb * space_px;
+
+        float pen_x = d.x;
+        float pen_y = d.y + (float)A.pixel_height * scale; // top->baseline
+
+        io::usize it = 0;
+        io::u32 cp = 0;
+        while (hi::internal::utf8_next(d.text, it, cp)) {
+            if (cp == '\n') {
+                pen_x = d.x;
+                pen_y += line_px;
+                continue;
+            }
+            if (cp == '\t') {
+                const float rel = pen_x - d.x;
+                const float k = io::ceil(tab_px > 1e-6f) ? rel / tab_px : 0.f;
+                pen_x = d.x + k * tab_px;
+                continue;
+            }
+            if (cp == ' ') {
+                pen_x += space_px + extra_px;
+                continue;
+            }
+
+            io::u32 gi = 0;
+            if (!A.map.find(cp, gi)) continue;
+
+            const auto& G = A.glyphs[gi];
+            internal::push_glyph_quad(_textq.verts, A, G, pen_x, pen_y, scale,
+                col, ocol, d.style.outline_px, d.style.softness_px);
+
+            pen_x += (float)G.advance * A.scale * scale + extra_px;
+        }
+    }
+
+    template<typename Derived>
+    void Window<Derived>::FlushText() noexcept {
+        if (_textq.verts.empty()) return;
+
+        _textq.end();
+        if (_textq.batches.empty()) { _textq.clear(); return; }
+
+        // shared upload once
+        _text_vao.bind();
+        _text_vbo.bind();
+        _text_vbo.data(_textq.verts.data(), _textq.verts.size() * sizeof(hi::internal::text_vertex),
+                        gl::BufferUsage::DynamicDraw);
+
+        gl::Enable(gl::Capability::Blend);
+        gl::BlendFunc(gl::BlendFactor::SrcAlpha, gl::BlendFactor::OneMinusSrcAlpha);
+
+        const float vw = (float)width();
+        const float vh = (float)height();
+
+        io::u32 last_prog = 0;
+        io::u32 last_tex = 0;
+
+        for (io::u32 bi = 0; bi < _textq.batches.size(); ++bi) {
+            const auto& b = _textq.batches[bi];
+            auto& A = _atlases[(io::u32)b.atlas];
+
+            if (A.prog != last_prog) {
+                gl::UseProgram(A.prog);
+                last_prog = A.prog;
+
+                const auto& u = A.uniforms;
+                if (u.uViewport >= 0) gl::Uniform2f(u.uViewport, vw, vh);
+                if (u.uPxRange >= 0) gl::Uniform1f(u.uPxRange, A.spread_px);
+                if (u.uAtlasSide >= 0) gl::Uniform1f(u.uAtlasSide, (float)A.atlas_side);
+                if (u.uTex >= 0) gl::Uniform1i(u.uTex, 0);
+            }
+
+            if (A.tex != last_tex) {
+                gl::ActiveTexture(gl::TexUnit::_0);
+                gl::BindTexture(gl::TexTarget::Tex2D, A.tex);
+                last_tex = A.tex;
+            }
+
+            gl::DrawArrays(gl::PrimitiveMode::Triangles, (int)b.first, (int)b.count);
+        }
+
+        gl::BindTexture(gl::TexTarget::Tex2D, 0);
+        gl::BindVertexArray(0);
+        gl::UseProgram(0);
+
+        _textq.clear();
+    }
+
+    
+    template <typename Derived>
+    AtlasId Window<Derived>::GenerateFontAtlas(FontId font_id, const FontAtlasDesc& desc) noexcept {
         if (font_id < 0 || (io::u32)font_id >= _font_paths.size()) return -1;
 
-        planned_font_atlas p{};
-        if (!plan_font(_font_paths[(io::u32)font_id].as_view(), desc, p)) return -1;
+        internal::planned_font_atlas p{};
+        if (!internal::plan_font(_font_paths[(io::u32)font_id].as_view(), desc, p)) return -1;
 
-        AtlasId id = gen_font_atlas(_atlases, p);
-        planned_destroy(p);
+        AtlasId id = internal::gen_font_atlas(_atlases, p);
+        internal::planned_destroy(p);
+        return id;
+    }
+
+    template <typename Derived>
+    template<typename... Scripts>
+    AtlasId Window<Derived>::GenerateFontAtlas(FontId font_id,
+                const FontAtlasDesc& desc, Scripts... scripts) noexcept {
+        if (font_id < 0 || (io::u32)font_id >= _font_paths.size()) return -1;
+
+        // 1) collect codepoints (scripts + desc)
+        io::vector<io::u32> cps{};
+        if (!hi::internal::collect_codepoints(_font_paths[(io::u32)font_id].as_view(), desc, cps, scripts...))
+            return -1;
+
+        // 2) create local desc with replaced codepoints
+        FontAtlasDesc d2 = desc;
+        d2.codepoints = cps.data();
+        d2.codepoint_count = (io::u32)cps.size();
+
+        // 3) repeat read from disk
+        internal::planned_font_atlas p{};
+        if (!internal::plan_font(_font_paths[(io::u32)font_id].as_view(), d2, p)) return -1;
+
+        AtlasId id = internal::gen_font_atlas(_atlases, p);
+        internal::planned_destroy(p);
         return id;
     }
 } // namespace hi
