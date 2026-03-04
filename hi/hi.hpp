@@ -630,7 +630,7 @@ namespace native {
             case WM_MOUSEWHEEL: {
                 int delta = GET_WHEEL_DELTA_WPARAM(wparam); // Returns 120 or -120
                 // @TODO Replace `0.f` with actual horizontal scroll delta
-                win->onScroll(delta / 120.f, 0.f); // Normalize before callback
+                win->onScroll(0.f, delta / 120.f); // Normalize before callback
                 return 0;
             }
             case WM_KEYDOWN: win->onKeyDown(HandleKey(wparam, true)); return 0;
@@ -645,6 +645,36 @@ namespace native {
                 if (wparam == VK_F10)       win->onKeyUp(Key::F10);
                 else if (wparam == VK_MENU) win->onKeyUp(Key::Alt);
                 return 0;
+
+            case WM_LBUTTONDOWN:
+                SetCapture(hwnd);
+                win->onKeyDown(Key::MouseLeft);
+                return 0;
+            case WM_LBUTTONUP:
+                ReleaseCapture();
+                win->onKeyUp(Key::MouseLeft);
+                return 0;
+
+            // --- mouse ---
+            case WM_RBUTTONDOWN: SetCapture(hwnd); win->onKeyDown(Key::MouseRight); return 0;
+            case WM_RBUTTONUP: ReleaseCapture(); win->onKeyUp(Key::MouseRight); return 0;
+            case WM_MBUTTONDOWN: SetCapture(hwnd); win->onKeyDown(Key::MouseMiddle); return 0;
+            case WM_MBUTTONUP: ReleaseCapture(); win->onKeyUp(Key::MouseMiddle); return 0;
+            case WM_XBUTTONDOWN: {
+                SetCapture(hwnd);
+                const WORD xb = GET_XBUTTON_WPARAM(wparam); // XBUTTON1 or XBUTTON2
+                if (xb == XBUTTON1) win->onKeyDown(Key::MouseX1);
+                else                win->onKeyDown(Key::MouseX2);
+                return TRUE; // important for XBUTTON*
+            }
+            case WM_XBUTTONUP: {
+                ReleaseCapture();
+                const WORD xb = GET_XBUTTON_WPARAM(wparam);
+                if (xb == XBUTTON1) win->onKeyUp(Key::MouseX1);
+                else                win->onKeyUp(Key::MouseX2);
+                return TRUE;
+            }
+
             case WM_NCCREATE: {
                 auto cs = reinterpret_cast<CREATESTRUCTW*>(lparam);
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)(cs->lpCreateParams));
@@ -836,8 +866,8 @@ namespace glx {
                 case FocusOut: win.onFocusChange(false); break;
 
                 case ButtonPress:
-                    if      (e.xbutton.button == Button4) win.onScroll(+1.f, 0.f);
-                    else if (e.xbutton.button == Button5) win.onScroll(-1.f, 0.f);
+                    if      (e.xbutton.button == Button4) win.onScroll(0.f, +1.f);
+                    else if (e.xbutton.button == Button5) win.onScroll(0.f, -1.f);
                     break;
 
                 case KeyPress:
@@ -1406,7 +1436,7 @@ namespace glx {
         AtlasId atlas;
         TextDock dock = TextDock::TopL;
 
-        float x, y;         // offset in px
+        float x, y;         // offset (px) from dock
         float scale = 1.f;
         io::char_view text; // UTF-8
         TextStyle style{};
@@ -1414,6 +1444,37 @@ namespace glx {
         float line_height = 1.0f;   // multiplier from pixel_height
         float tab_width = 4.0f;     // tab in spaces
         float space_between = 0.0f; // [-1..1]
+    };
+
+    struct ButtonStyle {
+        TextStyle normal{};
+        TextStyle hover{};
+        TextStyle active{};
+        float pad_x = 8.f; // px
+        float pad_y = 4.f; // px
+    };
+
+    struct ButtonDraw {
+        AtlasId  atlas = -1;
+        TextDock dock = TextDock::TopL;
+
+        float x = 0.f, y = 0.f; // offset (px) from dock
+        float scale = 1.f;
+        io::char_view text;
+
+        // layout
+        float line_height = 1.0f;
+        float tab_width = 4.0f;
+        float space_between = 0.0f;
+
+        ButtonStyle style{};
+    };
+
+    struct ButtonState {
+        bool hovered = false;
+        bool held = false;
+        bool clicked = false;
+        float x0 = 0, y0 = 0, x1 = 0, y1 = 0; // rect (px)
     };
 
 
@@ -2229,6 +2290,10 @@ namespace internal {
         AtlasId GenerateFontAtlas(FontId font_id, const FontAtlasDesc& desc) noexcept;
         template<typename... Scripts>
         AtlasId GenerateFontAtlas(FontId font_id, const FontAtlasDesc& desc, Scripts... scripts) noexcept;
+        
+        ButtonState Button(const ButtonDraw& b, float mouse_x, float mouse_y,
+                           bool mouse_down, bool mouse_released) noexcept;
+        
         // Immediate text
         void DrawText(const TextDraw& d) noexcept;
         // Call once per frame inside Render() (or end of Render())
@@ -2466,5 +2531,67 @@ namespace internal {
         AtlasId id = internal::gen_font_atlas(_atlases, p);
         internal::planned_destroy(p);
         return id;
+    }
+
+
+    template <typename Derived>
+    inline ButtonState Window<Derived>::Button(const ButtonDraw& b, float mx, float my,
+        bool mouse_down, bool mouse_released) noexcept
+    {
+        ButtonState out{};
+        if (b.atlas < 0 || (io::u32)b.atlas >= _atlases.size()) return out;
+        const internal::font_atlas& A = _atlases[(io::u32)b.atlas];
+
+        // 1) collect temporary TextDraw for measurement/drawing
+        TextDraw td{};
+        td.atlas         = b.atlas;
+        td.dock          = b.dock;
+        td.x = b.x; td.y = b.y;
+        td.scale         = b.scale;
+        td.text          = b.text;
+        td.line_height   = b.line_height;
+        td.tab_width     = b.tab_width;
+        td.space_between = b.space_between;
+
+        // 2) text bbox (local) + dock transform => bbox in window px
+        const float vw = (float)width();
+        const float vh = (float)height();
+
+        float ax = 0, ay = 0;
+        internal::dock_anchor_px(b.dock, vw, vh, ax, ay);
+
+        const auto bb = internal::measure_text_bbox_px(A, td);
+
+        float dx = 0, dy = 0;
+        internal::dock_align_shift(b.dock, bb, dx, dy);
+
+        const float origin_x = ax + b.x + dx;
+        const float origin_y = ay + b.y + dy;
+
+        float x0 = origin_x + bb.min_x;
+        float y0 = origin_y + bb.min_y;
+        float x1 = origin_x + bb.max_x;
+        float y1 = origin_y + bb.max_y;
+
+        // padding
+        x0 -= b.style.pad_x; y0 -= b.style.pad_y;
+        x1 += b.style.pad_x; y1 += b.style.pad_y;
+
+        out.x0 = x0; out.y0 = y0; out.x1 = x1; out.y1 = y1;
+
+        // 3) hit test
+        out.hovered = (mx >= x0 && mx <= x1 && my >= y0 && my <= y1);
+        out.held = out.hovered && mouse_down;
+        out.clicked = out.hovered && mouse_released; // release inside
+
+        // 4) style
+        if (out.held)        td.style = b.style.active;
+        else if (out.hovered)td.style = b.style.hover;
+        else                 td.style = b.style.normal;
+
+        // 5) draw
+        DrawText(td);
+
+        return out;
     }
 } // namespace hi

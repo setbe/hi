@@ -14,6 +14,12 @@ struct MainWindow : public hi::Window<MainWindow> {
     float move_offset_x{ 10.f };
     float move_offset_y{ 5.f };
 
+    // mouse
+    float mouse_x = 0.f;
+    float mouse_y = 0.f;
+    bool  mouse_down = false;
+    bool  prev_mouse_down = false;
+
     bool is_cursor{ true };
     bool is_fullscreen{ false };
 
@@ -27,13 +33,80 @@ struct MainWindow : public hi::Window<MainWindow> {
         this->setTitle(IO_U8("Hello World! Привіт Світе!"));
     }
 
+    void onError(hi::Error err, hi::AboutError ae) noexcept override {
+        setTitle(hi::what(ae));
+    }
+
+    void onKeyDown(hi::Key k) noexcept override {
+        using K = hi::Key;
+        switch (k) {
+        case K::_1: is_cursor = !is_cursor;         setCursorVisible(is_cursor);  break;
+        case K::_2: is_fullscreen = !is_fullscreen; setFullscreen(is_fullscreen); break;
+
+        case K::Right: move_offset_x += text_scale; break;
+        case K::Left:  move_offset_x -= text_scale; break;
+        case K::Down:  move_offset_y += text_scale; break;
+        case K::Up:    move_offset_y -= text_scale; break;
+
+        case K::MouseRight:
+        case K::MouseLeft: mouse_down = true; break;
+        }
+    }
+
+    void onKeyUp(hi::Key k) noexcept override {
+        using K = hi::Key;
+        switch (k) {
+        case K::_1: is_cursor = !is_cursor;         setCursorVisible(is_cursor);  break;
+        case K::_2: is_fullscreen = !is_fullscreen; setFullscreen(is_fullscreen); break;
+
+        case K::Right: move_offset_x += text_scale; break;
+        case K::Left:  move_offset_x -= text_scale; break;
+        case K::Down:  move_offset_y += text_scale; break;
+        case K::Up:    move_offset_y -= text_scale; break;
+
+        case K::MouseRight:
+        case K::MouseLeft: mouse_down = false; break;
+        }
+    }
+
+    void onMouseMove(int x, int y) noexcept override {
+        mouse_x = (float)x;
+        mouse_y = (float)y;
+    }
+
+    void onScroll(float deltaX, float deltaY) noexcept override {
+        text_scale += deltaX;
+        text_scale += deltaY;
+        io::out.reset();
+        io::out << "Current scale is " << text_scale << " times";
+        setTitle(io::out.scrap_view());
+    }
+
     void onRender() noexcept override {
         static float red = 0.f;
         red += .0001f;
         if (red > 1.f) red = 0.f;
-
         gl::ClearColor(red, 0.f, 0.f, 0.f);
         gl::Clear(gl::buffer_bit.Color | gl::buffer_bit.Depth);
+
+
+        const bool mouse_released = (prev_mouse_down && !mouse_down);
+
+        hi::ButtonDraw btn{};
+        btn.atlas = world_atlas;
+        btn.dock = hi::TextDock::TopC;
+        btn.x = 0.f; btn.y = 150.f;
+        btn.scale = text_scale;
+        btn.text = IO_U8("Click me");
+        btn.style.normal = hi::TextStyle{1.f,  1.f, 1.f,  1.f, false };
+        btn.style.hover = hi::TextStyle{ 1.f,  1.f, 0.7f, 1.f, true, 0.f, 0.f, 0.f, 1.f, /*.outline_px*/1.2f, /*.softness_px*/0.9f };
+        btn.style.active = hi::TextStyle{0.7f, 1.f, 0.7f, 1.f, true, 0.f, 0.f, 0.f, 1.f, /*.outline_px*/2.0f, /*.softness_px*/0.9f };
+
+        auto st = Button(btn, mouse_x, mouse_y, mouse_down, mouse_released);
+        if (st.clicked) {
+            setTitle(IO_U8("Clicked!"));
+        }
+        
 
         hi::TextStyle ts{};
         ts.r = red;
@@ -138,31 +211,8 @@ struct MainWindow : public hi::Window<MainWindow> {
         //this->DrawText(td);
 
         this->FlushText();
-    }
 
-    void onError(hi::Error err, hi::AboutError ae) noexcept override {
-        setTitle(hi::what(ae));
-    }
-
-    void onKeyDown(hi::Key k) noexcept override {
-        using K = hi::Key;
-        switch (k) {
-            case K::_1: is_cursor     =! is_cursor;     setCursorVisible(is_cursor);  break;
-            case K::_2: is_fullscreen =! is_fullscreen; setFullscreen(is_fullscreen); break;
-
-            case K::Right: move_offset_x += text_scale; break;
-            case K::Left:  move_offset_x -= text_scale; break;
-            case K::Down:  move_offset_y += text_scale; break;
-            case K::Up:    move_offset_y -= text_scale; break;
-        }
-    }
-
-    void onScroll(float deltaX, float deltaY) noexcept override {
-        text_scale += deltaX;
-        text_scale += deltaY;
-        io::out.reset();
-        io::out << "Current scale is " << text_scale << " times";
-        setTitle(io::out.scrap_view());
+        prev_mouse_down = mouse_down;
     }
 
     bool LoadResources() noexcept {
