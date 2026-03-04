@@ -44,6 +44,7 @@ struct MainWindow : public hi::Window<MainWindow> {
 
         hi::TextDraw td{};
         td.style = ts;
+
         td.scale = text_scale;
         td.space_between = -0.18f;
 
@@ -52,77 +53,89 @@ struct MainWindow : public hi::Window<MainWindow> {
 
         // 1) WORLD: Latin + Cyrillic (UI / mixed text)
         td.atlas = world_atlas;
-        td.x = x0; td.y = y;
+
+        /*td.x = x0; td.y = y;
         td.text = IO_U8("[WORLD] Hello World!  Привіт Світе!  Greek? (won't)  عربى? (won't)");
-        this->DrawText(td);
+        this->DrawText(td);*/
 
-        y += 90.f;
+        td.x = td.y = 0.f;
+        td.dock = hi::TextDock::TopL;    td.text = "[top-left]"; this->DrawText(td);
+        td.dock = hi::TextDock::TopC;    td.text = "[top-center]"; this->DrawText(td);
+        td.dock = hi::TextDock::TopR;    td.text = "[top-right]"; this->DrawText(td);
+        td.dock = hi::TextDock::LeftC;   td.text = "[left-center]"; this->DrawText(td);
+        td.dock = hi::TextDock::RightC;  td.text = "[right-center]"; this->DrawText(td);
+        td.dock = hi::TextDock::BottomL; td.text = "[bottom-left]"; this->DrawText(td);
+        td.dock = hi::TextDock::BottomC; td.text = "[bottom-center]"; this->DrawText(td);
+        td.dock = hi::TextDock::BottomR; td.text = "[bottom-right]"; this->DrawText(td);
 
-        // 2) Наочно: той самий Han-рядок 4 рази з різними CJK атласами.
-        //    Так ти одразу побачиш різницю форм гліфів між JP/SC/TC/KR.
-        io::char_view han_line = IO_U8("漢字對照: 直 骨 令 青 海 國 龍 風 體");
-        // (цей рядок спеціально з символами, які часто мають регіональні форми)
+        td.dock = hi::TextDock::TopL;
 
-        td.x = x0; td.y = y;
+        // td.x = x0; td.y = y;
+        //y += 90.f;
 
-        io::out.reset();
+        //// 2) Han-string with the same glyphs, but with different atlases JP/SC/TC/KR.
+        //io::char_view han_line = IO_U8("漢字對照: 直 骨 令 青 海 國 龍 風 體");
 
-        td.atlas = jp_atlas;
-        io::out << "[JP atlas]" << han_line;
-        td.text = io::out.scrap_view();
-        this->DrawText(td);
-        y += 70.f;
+        //td.x = x0; td.y = y;
 
-        io::out.reset();
+        //io::out.reset();
 
-        td.atlas = sc_atlas;
-        td.x = x0; td.y = y;
-        io::out << "[SC atlas]" << han_line;
-        td.text = io::out.scrap_view();
-        this->DrawText(td);
-        y += 70.f;
+        //td.atlas = jp_atlas;
+        //io::out << "[JP atlas]" << han_line;
+        //td.text = io::out.scrap_view();
+        //this->DrawText(td);
+        //y += 70.f;
 
-        io::out.reset();
+        //io::out.reset();
 
-        td.atlas = tc_atlas;
-        td.x = x0; td.y = y;
-        io::out << "[TC atlas]" << han_line;
-        td.text = io::out.scrap_view();
-        this->DrawText(td);
-        y += 70.f;
+        //td.atlas = sc_atlas;
+        //td.x = x0; td.y = y;
+        //io::out << "[SC atlas]" << han_line;
+        //td.text = io::out.scrap_view();
+        //this->DrawText(td);
+        //y += 70.f;
 
-        io::out.reset();
+        //io::out.reset();
 
-        td.atlas = kr_atlas;
-        td.x = x0; td.y = y;
-        io::out << "[KR atlas]" << han_line;
-        td.text = io::out.scrap_view();
-        this->DrawText(td);
-        y += 90.f;
+        //td.atlas = tc_atlas;
+        //td.x = x0; td.y = y;
+        //io::out << "[TC atlas]" << han_line;
+        //td.text = io::out.scrap_view();
+        //this->DrawText(td);
+        //y += 70.f;
 
-        // 3) Lang examples (to ensure Kana/Hangul works)
-        td.atlas = jp_atlas;
-        td.x = x0; td.y = y;
-        td.text = IO_U8("[JP] 日本語テスト: こんにちは世界  カタカナ: アイウエオ  漢字: 東京 大学 日本");
-        this->DrawText(td);
-        y += 70.f;
+        //io::out.reset();
 
-        td.atlas = kr_atlas;
-        td.x = x0; td.y = y;
-        td.text = IO_U8("[KR] 한국어 테스트: 안녕하세요 세계  한글 + 漢字 혼용: 國語 漢字");
-        this->DrawText(td);
-        y += 70.f;
+        //td.atlas = kr_atlas;
+        //td.x = x0; td.y = y;
+        //io::out << "[KR atlas]" << han_line;
+        //td.text = io::out.scrap_view();
+        //this->DrawText(td);
+        //y += 90.f;
 
-        td.atlas = sc_atlas;
-        td.x = x0; td.y = y;
-        td.text = IO_U8("[SC] 你好，世界  简体中文示例: 汉字 语言 共和国 龙 风 体");
-        this->DrawText(td);
-        y += 70.f;
+        //// 3) Lang examples (to ensure Kana/Hangul works)
+        //td.atlas = jp_atlas;
+        //td.x = x0; td.y = y;
+        //td.text = IO_U8("[JP] 日本語テスト: こんにちは世界  カタカナ: アイウエオ  漢字: 東京 大学 日本");
+        //this->DrawText(td);
+        //y += 70.f;
 
-        td.atlas = tc_atlas;
-        td.x = x0; td.y = y;
-        td.text = IO_U8("[TC] 你好，世界  繁體中文示例: 漢字 語言 共和國 龍 風 體");
-        this->DrawText(td);
+        //td.atlas = kr_atlas;
+        //td.x = x0; td.y = y;
+        //td.text = IO_U8("[KR] 한국어 테스트: 안녕하세요 세계  한글 + 漢字 혼용: 國語 漢字");
+        //this->DrawText(td);
+        //y += 70.f;
+
+        //td.atlas = sc_atlas;
+        //td.x = x0; td.y = y;
+        //td.text = IO_U8("[SC] 你好，世界  简体中文示例: 汉字 语言 共和国 龙 风 体");
+        //this->DrawText(td);
+        //y += 70.f;
+
+        //td.atlas = tc_atlas;
+        //td.x = x0; td.y = y;
+        //td.text = IO_U8("[TC] 你好，世界  繁體中文示例: 漢字 語言 共和國 龍 風 體");
+        //this->DrawText(td);
 
         this->FlushText();
     }
@@ -176,38 +189,38 @@ struct MainWindow : public hi::Window<MainWindow> {
             return out_atlas >= 0;
         };
 
-        // WORLD: тільки те, що реально треба для UI (Latin/Cyrillic/Greek/Arabic/... роби окремо за потреби)
+        // WORLD: Latin/Cyrillic/Greek/Arabic/...
         if (!load_atlas(FONT_FILENAME_WORLD, world_atlas,
             stbtt_codepoints::Script::Latin,
             stbtt_codepoints::Script::Cyrillic)) return false;
         io::out << "WORLD atlas side: " << getAtlasSide(world_atlas) << io::out.endl;
 
-        // JP
-        if (!load_atlas(FONT_FILENAME_JAPANESE, jp_atlas,
-            stbtt_codepoints::Script::Latin,
-            stbtt_codepoints::Script::Kana,
-            stbtt_codepoints::Script::JouyouKanji,
-            stbtt_codepoints::Script::CJK)) return false;
-        io::out << "JP atlas side: " << getAtlasSide(jp_atlas) << io::out.endl;
+        //// JP
+        //if (!load_atlas(FONT_FILENAME_JAPANESE, jp_atlas,
+        //    stbtt_codepoints::Script::Latin,
+        //    stbtt_codepoints::Script::Kana,
+        //    stbtt_codepoints::Script::JouyouKanji,
+        //    stbtt_codepoints::Script::CJK)) return false;
+        //io::out << "JP atlas side: " << getAtlasSide(jp_atlas) << io::out.endl;
 
-        // KR
-        // TODO: Script::Hangul
-        if (!load_atlas(FONT_FILENAME_KOREAN, kr_atlas,
-            stbtt_codepoints::Script::Latin,
-            stbtt_codepoints::Script::CJK)) return false;
-        io::out << "KR atlas side: " << getAtlasSide(kr_atlas) << io::out.endl;
+        //// KR
+        //// TODO: Script::Hangul
+        //if (!load_atlas(FONT_FILENAME_KOREAN, kr_atlas,
+        //    stbtt_codepoints::Script::Latin,
+        //    stbtt_codepoints::Script::CJK)) return false;
+        //io::out << "KR atlas side: " << getAtlasSide(kr_atlas) << io::out.endl;
 
-        // TC
-        if (!load_atlas(FONT_FILENAME_TRADITIONAL_CHINESE, tc_atlas,
-            stbtt_codepoints::Script::Latin,
-            stbtt_codepoints::Script::CJK)) return false;
-        io::out << "TC atlas side: " << getAtlasSide(tc_atlas) << io::out.endl;
+        //// TC
+        //if (!load_atlas(FONT_FILENAME_TRADITIONAL_CHINESE, tc_atlas,
+        //    stbtt_codepoints::Script::Latin,
+        //    stbtt_codepoints::Script::CJK)) return false;
+        //io::out << "TC atlas side: " << getAtlasSide(tc_atlas) << io::out.endl;
 
-        // SC
-        if (!load_atlas(FONT_FILENAME_SIMPLIFIED_CHINESE, sc_atlas,
-            stbtt_codepoints::Script::Latin,
-            stbtt_codepoints::Script::CJK)) return false;
-        io::out << "SC atlas side: " << getAtlasSide(sc_atlas) << io::out.endl;
+        //// SC
+        //if (!load_atlas(FONT_FILENAME_SIMPLIFIED_CHINESE, sc_atlas,
+        //    stbtt_codepoints::Script::Latin,
+        //    stbtt_codepoints::Script::CJK)) return false;
+        //io::out << "SC atlas side: " << getAtlasSide(sc_atlas) << io::out.endl;
 
         return true;
     }

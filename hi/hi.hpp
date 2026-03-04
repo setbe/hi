@@ -1396,9 +1396,17 @@ namespace glx {
         float softness_px = 0.75f; // edge softness in pixels
     };
 
+    enum class TextDock {
+        TopL, TopC, TopR,
+        LeftC, RightC,
+        BottomL, BottomC, BottomR
+    };
+
     struct TextDraw {
         AtlasId atlas;
-        float x, y;         // top-left baseline origin
+        TextDock dock = TextDock::TopL;
+
+        float x, y;         // offset in px
         float scale = 1.f;
         io::char_view text; // UTF-8
         TextStyle style{};
@@ -1979,6 +1987,104 @@ namespace internal {
 
         return !out.empty();
     }
+    struct text_bbox {
+        float min_x, min_y, max_x, max_y;
+        bool  any;
+    };
+
+    static inline text_bbox measure_text_bbox_px(const font_atlas& A, const TextDraw& d) noexcept {
+        const float scale = d.scale;
+        const float line_px = (float)A.pixel_height * scale * ((d.line_height <= 0.f) ? 1.f : d.line_height);
+        const float space_px = line_px * 0.5f;
+        const float tab_px = space_px * ((d.tab_width <= 0.f) ? 4.f : d.tab_width);
+
+        float sb = d.space_between;
+        if (sb < -1.f) sb = -1.f;
+        if (sb > 1.f) sb = 1.f;
+        const float extra_px = sb * space_px;
+
+        float pen_x = 0.0f;
+        float pen_y = (float)A.pixel_height * scale;
+
+        text_bbox bb{};
+        bb.min_x = bb.min_y = 1e30f;
+        bb.max_x = bb.max_y = -1e30f;
+        bb.any = false;
+
+        auto add_pt = [&](float x, float y) {
+            bb.min_x = bb.min_x < x ? bb.min_x : x;
+            bb.min_y = bb.min_y < y ? bb.min_y : y;
+            bb.max_x = bb.max_x > x ? bb.max_x : x;
+            bb.max_y = bb.max_y > y ? bb.max_y : y;
+            bb.any = true;
+        };
+
+        io::usize it = 0;
+        io::u32 cp = 0;
+        while (utf8_next(d.text, it, cp)) {
+            if (cp == '\n') { pen_x = 0.f; pen_y += line_px; continue; }
+
+            if (cp == '\t') {
+                const float rel = pen_x;
+                const float k = (tab_px > 1e-6f) ? io::ceil(rel / tab_px) : 0.f;
+                pen_x = k * tab_px;
+                add_pt(pen_x, pen_y);
+                continue;
+            }
+
+            if (cp == ' ') {
+                pen_x += space_px + extra_px;
+                add_pt(pen_x, pen_y);
+                continue;
+            }
+
+            io::u32 gi = 0;
+            if (!A.map.find(cp, gi)) continue;
+            const auto& G = A.glyphs[gi];
+
+            const float fu2px = A.scale * scale;
+            const float gx0 = pen_x + (float)G.x_min * fu2px;
+            const float gy0 = pen_y - (float)G.y_max * fu2px;
+            const float gx1 = pen_x + (float)G.x_max * fu2px;
+            const float gy1 = pen_y - (float)G.y_min * fu2px;
+
+            add_pt(gx0, gy0); add_pt(gx1, gy1);
+
+            pen_x += (float)G.advance * A.scale * scale + extra_px;
+            add_pt(pen_x, pen_y);
+        }
+
+        if (!bb.any) { bb.min_x = bb.min_y = bb.max_x = bb.max_y = 0.f; }
+        return bb;
+    }
+
+    static inline void dock_anchor_px(TextDock dock, float vw, float vh, float& ax, float& ay) noexcept {
+        switch (dock) {
+        case TextDock::TopL:    ax = 0.f;       ay = 0.f;    break;
+        case TextDock::TopC:    ax = vw * 0.5f; ay = 0.f;    break;
+        case TextDock::TopR:    ax = vw;        ay = 0.f;    break;
+        case TextDock::LeftC:   ax = 0.f;       ay = vh * 0.5f; break;
+        case TextDock::RightC:  ax = vw;        ay = vh * 0.5f; break;
+        case TextDock::BottomL: ax = 0.f;       ay = vh;    break;
+        case TextDock::BottomC: ax = vw * 0.5f; ay = vh;    break;
+        case TextDock::BottomR: ax = vw;        ay = vh;    break;
+        }
+    }
+
+    static inline void dock_align_shift(TextDock dock, const text_bbox& bb, float& dx, float& dy) noexcept {
+        const bool top    = (dock == TextDock::TopL ||    dock == TextDock::TopC ||    dock == TextDock::TopR);
+        const bool bottom = (dock == TextDock::BottomL || dock == TextDock::BottomC || dock == TextDock::BottomR);
+        const bool left   = (dock == TextDock::TopL ||    dock == TextDock::LeftC ||   dock == TextDock::BottomL);
+        const bool right  = (dock == TextDock::TopR ||    dock == TextDock::RightC ||  dock == TextDock::BottomR);
+
+        if (left)        dx = -bb.min_x;
+        else if (right)  dx = -bb.max_x;
+        else             dx = -0.5f * (bb.min_x + bb.max_x); // center
+
+        if (top)         dy = -bb.min_y;
+        else if (bottom) dy = -bb.max_y;
+        else             dy = -0.5f * (bb.min_y + bb.max_y); // center
+    }
 
     // ------------------------------
     // text batching
@@ -2165,9 +2271,7 @@ namespace internal {
         _width=w; _height=h; // Update window size
         switch (api()) { // Switch between APIs
         case RendererApi::Opengl:
-#ifdef _WIN32
             io::sleep_ms(7); // Hack: slow down the program.
-#endif
             gl::Viewport(0, 0, w, h); // Call viewport 
             break;
         default:
@@ -2221,47 +2325,51 @@ namespace internal {
             ? hi::internal::pack_rgba8(d.style.or_, d.style.og_, d.style.ob_, d.style.oa_)
             : 0u;
 
+        // ---- dock transform ----
+        const float vw = (float)width();
+        const float vh = (float)height();
+
+        float ax, ay; internal::dock_anchor_px(d.dock, vw, vh, ax, ay);
+
+        const auto bb = internal::measure_text_bbox_px(A, d);
+
+        float dx, dy; internal::dock_align_shift(d.dock, bb, dx, dy);
+
+        const float origin_x = ax + d.x + dx;
+        const float origin_y = ay + d.y + dy;
+
+        // ---- existing layout (but use origin_*) ----
         const float scale = d.scale;
         const float line_px = (float)A.pixel_height * scale * ((d.line_height <= 0.f) ? 1.f : d.line_height);
-
-        // "space" як і було (пів line-height), але узгоджено з line_height
         const float space_px = line_px * 0.5f;
-
-        // таб = N пробілів
         const float tab_px = space_px * ((d.tab_width <= 0.f) ? 4.f : d.tab_width);
 
-        // space_between: [-1..1] => [-space_px .. +space_px]
         float sb = d.space_between;
         if (sb < -1.f) sb = -1.f;
         if (sb > 1.f) sb = 1.f;
         const float extra_px = sb * space_px;
 
-        float pen_x = d.x;
-        float pen_y = d.y + (float)A.pixel_height * scale; // top->baseline
+        float pen_x = origin_x;
+        float pen_y = origin_y + (float)A.pixel_height * scale; // top->baseline
 
         io::usize it = 0;
         io::u32 cp = 0;
         while (hi::internal::utf8_next(d.text, it, cp)) {
-            if (cp == '\n') {
-                pen_x = d.x;
-                pen_y += line_px;
-                continue;
-            }
+            if (cp == '\n') { pen_x = origin_x; pen_y += line_px; continue; }
+
             if (cp == '\t') {
-                const float rel = pen_x - d.x;
-                const float k = io::ceil(tab_px > 1e-6f) ? rel / tab_px : 0.f;
-                pen_x = d.x + k * tab_px;
+                const float rel = pen_x - origin_x;
+                const float k = (tab_px > 1e-6f) ? io::ceil(rel / tab_px) : 0.f;
+                pen_x = origin_x + k * tab_px;
                 continue;
             }
-            if (cp == ' ') {
-                pen_x += space_px + extra_px;
-                continue;
-            }
+
+            if (cp == ' ') { pen_x += space_px + extra_px; continue; }
 
             io::u32 gi = 0;
             if (!A.map.find(cp, gi)) continue;
-
             const auto& G = A.glyphs[gi];
+
             internal::push_glyph_quad(_textq.verts, A, G, pen_x, pen_y, scale,
                 col, ocol, d.style.outline_px, d.style.softness_px);
 
