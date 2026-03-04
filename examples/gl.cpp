@@ -2,7 +2,12 @@
 #include "../hi/hi.hpp"
 #include "../3rd_party/stb_truetype_stream/codepoints/stbtt_codepoints_stream.hpp"
 
-static const char* DEFAULT_FONT_FILENAME{ "FreeSansBold.ttf" };
+static const char* FONT_DIR{ "../resources/noto/" };
+static const char* FONT_FILENAME_WORLD{ "NotoSans-Regular.ttf" };
+static const char* FONT_FILENAME_JAPANESE{ "NotoSansJP-Regular.ttf" };
+static const char* FONT_FILENAME_KOREAN{ "NotoSansKR-Regular.ttf" };
+static const char* FONT_FILENAME_TRADITIONAL_CHINESE{ "NotoSansTC-Regular.ttf" };
+static const char* FONT_FILENAME_SIMPLIFIED_CHINESE{ "NotoSansSC-Regular.ttf" };
 
 struct MainWindow : public hi::Window<MainWindow> {
     float text_scale{ 1.f };
@@ -12,16 +17,18 @@ struct MainWindow : public hi::Window<MainWindow> {
     bool is_cursor{ true };
     bool is_fullscreen{ false };
 
-    hi::AtlasId diversity{ -1 };
-    hi::AtlasId cjk{ -1 };
+    hi::AtlasId world_atlas{ -1 };
+    hi::AtlasId jp_atlas{ -1 };
+    hi::AtlasId kr_atlas{ -1 };
+    hi::AtlasId tc_atlas{ -1 };
+    hi::AtlasId sc_atlas{ -1 };
 
     MainWindow() noexcept {
         this->setTitle(IO_U8("Hello World! Привіт Світе!"));
     }
 
     void onRender() noexcept override {
-        using io::u64;
-        static float red = 0.;
+        static float red = 0.f;
         red += .0001f;
         if (red > 1.f) red = 0.f;
 
@@ -31,23 +38,93 @@ struct MainWindow : public hi::Window<MainWindow> {
         hi::TextStyle ts{};
         ts.r = red;
         ts.b = red;
-        ts.softness_px = .0f;
+        ts.softness_px = 0.f;
         ts.outline = true;
         ts.outline_px = text_scale * 0.05f;
+
         hi::TextDraw td{};
         td.style = ts;
-        td.atlas = diversity;
         td.scale = text_scale;
-        td.x = move_offset_x;
-        td.y = move_offset_y;
-        
         td.space_between = -0.18f;
-        td.tab_width = 4.f;
-        td.text = IO_U8("AHello World!\nПривіт Світе!\n\tThis line has tab");
+
+        const float x0 = move_offset_x;
+        float y = move_offset_y;
+
+        // 1) WORLD: Latin + Cyrillic (UI / mixed text)
+        td.atlas = world_atlas;
+        td.x = x0; td.y = y;
+        td.text = IO_U8("[WORLD] Hello World!  Привіт Світе!  Greek? (won't)  عربى? (won't)");
+        this->DrawText(td);
+
+        y += 90.f;
+
+        // 2) Наочно: той самий Han-рядок 4 рази з різними CJK атласами.
+        //    Так ти одразу побачиш різницю форм гліфів між JP/SC/TC/KR.
+        io::char_view han_line = IO_U8("漢字對照: 直 骨 令 青 海 國 龍 風 體");
+        // (цей рядок спеціально з символами, які часто мають регіональні форми)
+
+        td.x = x0; td.y = y;
+
+        io::out.reset();
+
+        td.atlas = jp_atlas;
+        io::out << "[JP atlas]" << han_line;
+        td.text = io::out.scrap_view();
+        this->DrawText(td);
+        y += 70.f;
+
+        io::out.reset();
+
+        td.atlas = sc_atlas;
+        td.x = x0; td.y = y;
+        io::out << "[SC atlas]" << han_line;
+        td.text = io::out.scrap_view();
+        this->DrawText(td);
+        y += 70.f;
+
+        io::out.reset();
+
+        td.atlas = tc_atlas;
+        td.x = x0; td.y = y;
+        io::out << "[TC atlas]" << han_line;
+        td.text = io::out.scrap_view();
+        this->DrawText(td);
+        y += 70.f;
+
+        io::out.reset();
+
+        td.atlas = kr_atlas;
+        td.x = x0; td.y = y;
+        io::out << "[KR atlas]" << han_line;
+        td.text = io::out.scrap_view();
+        this->DrawText(td);
+        y += 90.f;
+
+        // 3) Lang examples (to ensure Kana/Hangul works)
+        td.atlas = jp_atlas;
+        td.x = x0; td.y = y;
+        td.text = IO_U8("[JP] 日本語テスト: こんにちは世界  カタカナ: アイウエオ  漢字: 東京 大学 日本");
+        this->DrawText(td);
+        y += 70.f;
+
+        td.atlas = kr_atlas;
+        td.x = x0; td.y = y;
+        td.text = IO_U8("[KR] 한국어 테스트: 안녕하세요 세계  한글 + 漢字 혼용: 國語 漢字");
+        this->DrawText(td);
+        y += 70.f;
+
+        td.atlas = sc_atlas;
+        td.x = x0; td.y = y;
+        td.text = IO_U8("[SC] 你好，世界  简体中文示例: 汉字 语言 共和国 龙 风 体");
+        this->DrawText(td);
+        y += 70.f;
+
+        td.atlas = tc_atlas;
+        td.x = x0; td.y = y;
+        td.text = IO_U8("[TC] 你好，世界  繁體中文示例: 漢字 語言 共和國 龍 風 體");
         this->DrawText(td);
 
         this->FlushText();
-        this->SwapBuffers();
     }
 
     void onError(hi::Error err, hi::AboutError ae) noexcept override {
@@ -76,25 +153,62 @@ struct MainWindow : public hi::Window<MainWindow> {
     }
 
     bool LoadResources() noexcept {
-        io::string cwd, font_path;
-        if (!fs::current_directory(cwd)
-            || !fs::path_join(cwd, DEFAULT_FONT_FILENAME, font_path))
-            return false;
-
-        io::out << "current dir is: " << cwd << '\n'
-                << "searching for font: " << font_path << io::out.endl;
-        hi::FontId font_id = this->LoadFont(DEFAULT_FONT_FILENAME);
-        if (font_id < 0) return false;
-
         hi::FontAtlasDesc desc{};
         desc.mode = hi::FontAtlasMode::SDF;
-        desc.pixel_height = 24;
+        desc.pixel_height = 48;
         desc.spread_px = 4.f;
 
-        diversity = this->GenerateFontAtlas(font_id, desc, stbtt_codepoints::Script::Latin, stbtt_codepoints::Script::Cyrillic);
-        if (diversity < 0) return false;
+        io::string full_font_path;
+        {
+            io::string cwd;
+            if (!fs::current_directory(cwd) || !fs::path_join(cwd, FONT_DIR, full_font_path)) return false;
+            io::out << "current dir is: " << cwd << '\n'
+                << "searching in directory: " << full_font_path << io::out.endl;
+        }
 
-        io::out << "diversity: " << getAtlasSide(diversity) << io::out.endl;
+        io::string current_font;
+
+        auto load_atlas = [&](const char* filename, hi::AtlasId& out_atlas, auto... scripts) -> bool {
+            fs::path_join(full_font_path, filename, current_font);
+            hi::FontId font_id = this->LoadFont(current_font.as_view());
+            if (font_id < 0) return false;
+            out_atlas = this->GenerateFontAtlas(font_id, desc, scripts...);
+            return out_atlas >= 0;
+        };
+
+        // WORLD: тільки те, що реально треба для UI (Latin/Cyrillic/Greek/Arabic/... роби окремо за потреби)
+        if (!load_atlas(FONT_FILENAME_WORLD, world_atlas,
+            stbtt_codepoints::Script::Latin,
+            stbtt_codepoints::Script::Cyrillic)) return false;
+        io::out << "WORLD atlas side: " << getAtlasSide(world_atlas) << io::out.endl;
+
+        // JP
+        if (!load_atlas(FONT_FILENAME_JAPANESE, jp_atlas,
+            stbtt_codepoints::Script::Latin,
+            stbtt_codepoints::Script::Kana,
+            stbtt_codepoints::Script::JouyouKanji,
+            stbtt_codepoints::Script::CJK)) return false;
+        io::out << "JP atlas side: " << getAtlasSide(jp_atlas) << io::out.endl;
+
+        // KR
+        // TODO: Script::Hangul
+        if (!load_atlas(FONT_FILENAME_KOREAN, kr_atlas,
+            stbtt_codepoints::Script::Latin,
+            stbtt_codepoints::Script::CJK)) return false;
+        io::out << "KR atlas side: " << getAtlasSide(kr_atlas) << io::out.endl;
+
+        // TC
+        if (!load_atlas(FONT_FILENAME_TRADITIONAL_CHINESE, tc_atlas,
+            stbtt_codepoints::Script::Latin,
+            stbtt_codepoints::Script::CJK)) return false;
+        io::out << "TC atlas side: " << getAtlasSide(tc_atlas) << io::out.endl;
+
+        // SC
+        if (!load_atlas(FONT_FILENAME_SIMPLIFIED_CHINESE, sc_atlas,
+            stbtt_codepoints::Script::Latin,
+            stbtt_codepoints::Script::CJK)) return false;
+        io::out << "SC atlas side: " << getAtlasSide(sc_atlas) << io::out.endl;
+
         return true;
     }
 }; // struct MainWindow
@@ -105,7 +219,7 @@ int main() {
 
     while (win.PollEvents()) {
         win.Render();
-        
+        win.SwapBuffers();
     }
     io::exit_process(0);
 }

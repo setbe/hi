@@ -190,8 +190,7 @@ function(hi_apply_freestanding target)
         # 1) DO NOT select CRT runtime for freestanding
         #    (so CMake/MSVC won't inject /DEFAULTLIB:libcpmt/msvcrt)
         set_property(TARGET ${target} PROPERTY MSVC_RUNTIME_LIBRARY
-            $<$<NOT:${_GE_FREESTANDING}>:MultiThreaded$<$<CONFIG:Debug>:Debug>$<$<NOT:$<CONFIG:Debug>>:DLL>>
-            $<$<AND:${_GE_FREESTANDING},$<NOT:$<CONFIG:Debug>>>:MultiThreaded> # /MT
+          "$<IF:${_GE_FREESTANDING},MultiThreaded,$<IF:$<CONFIG:Debug>,MultiThreadedDebug,MultiThreadedDLL>>"
         )
 
         # 2) No default libs at link time for freestanding configs
@@ -254,7 +253,7 @@ function(hi_console target)
     endif()
 
     # CONSOLE define only for configs where it set
-    target_compile_definitions(${name} PRIVATE
+    target_compile_definitions(${target} PRIVATE
         $<$<OR:$<CONFIG:Debug>,$<CONFIG:Release>,$<CONFIG:ReleaseMini>>:CONSOLE>
     )
 endfunction()
@@ -411,6 +410,20 @@ hi_add_test_exe(test_crypto
     CPP "examples/crypto.cpp"
     HEADERS ${TEST_SOURCES_CRYPTO}
     LIBS io crypto
+)
+
+# thread
+hi_add_test_exe(test_thread
+    CPP "examples/tests/thread.cpp"
+    HEADERS ${SOURCES_IO}
+    LIBS io
+)
+
+# thread VTune threading test
+hi_add_test_exe(threadpool_vtune
+    CPP "examples/threadpool_vtune.cpp"
+    HEADERS ${SOURCES_IO}
+    LIBS io
 )
 
 # -----------------------------------------------------------------------------

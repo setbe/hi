@@ -37,16 +37,18 @@
 // ============================================================================
 #ifdef IO_IMPLEMENTATION
 #   if defined(_WIN32)
-#      ifndef WIN32_LEAN_AND_MEAN
-#          define WIN32_LEAN_AND_MEAN
-#      endif
-#      ifndef NOMINMAX
-#          define NOMINMAX
-#      endif
-#      include <Windows.h>
-#      include <bcrypt.h>
+#       ifndef WIN32_LEAN_AND_MEAN
+#           define WIN32_LEAN_AND_MEAN
+#       endif
+#       ifndef NOMINMAX
+#           define NOMINMAX
+#       endif
+#       include <Windows.h>
+#       include <bcrypt.h>
 #   elif defined(__linux__)
-    // nothing to include
+#       include <pthread.h>
+#       include <unistd.h>
+#       include <sched.h>
 #   else
 #       error "OS isn't specified"
 #   endif
@@ -145,8 +147,18 @@ static void(IO_CDECL* _onexit(void(IO_CDECL* func)(void)))(void) {
 
 #pragma region macros
 
+#ifndef IO_CACHELINE
+#   define IO_CACHELINE 64
+#endif
+
 #ifndef IO_TERMINAL_BUFFER_SIZE
 #   define IO_TERMINAL_BUFFER_SIZE 512
+#endif
+
+#if defined(_MSC_VER)
+#   define IO_ALIGN(N) __declspec(align(N))
+#else
+#   define IO_ALIGN(N) __attribute__((aligned(N)))
 #endif
 
 
@@ -396,6 +408,50 @@ namespace io {
         return (u8)iy;
     }
 
+    static inline void cpu_pause() noexcept {
+#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
+        _mm_pause();
+#elif (defined(__i386__) || defined(__x86_64__))
+        __asm__ __volatile__("pause");
+#elif defined(_WIN32) || defined(_WIN64)
+        ::YieldProcessor();
+#else
+        // ARM: yield
+        __asm__ __volatile__("yield");
+#endif
+    }
+
+    static inline void cpu_yield() noexcept {
+#if defined(_WIN32) || defined(_WIN64)
+        ::SwitchToThread();
+#else
+        ::sched_yield();
+#endif
+    }
+
+    struct Backoff {
+        unsigned n = 0;
+
+        void relax() noexcept {
+            if (n < 16) {
+                for (unsigned i = 0; i < (1u << n); ++i) cpu_pause();
+            }
+            else if (n < 22) {
+                cpu_yield();
+            }
+            else {
+#if defined(_WIN32) || defined(_WIN64)
+                ::Sleep(0);
+#else
+                ::sched_yield();
+#endif
+            }
+            if (n < 30) ++n;
+        }
+
+        void reset() noexcept { n = 0; }
+    };
+
     // ----------------- Basic SFINAE Primitives --------------------
 
     template<bool B, typename T = void> struct enable_if {};
@@ -582,6 +638,11 @@ namespace io {
     }
 #endif
 } // namespace io
+
+
+// ============================================================================
+//                         A T O M I C
+// ============================================================================
 
 #pragma region atomic
 // Minimal freestanding-friendly atomic wrapper for C++20
@@ -835,11 +896,320 @@ namespace io {
 #endif // IO_HAS_STD_ATOMIC
     }; // class atomic
 
+    struct IO_ALIGN(IO_CACHELINE) PaddedSizeT {
+        io::atomic<size_t> v{ 0 };
+        unsigned char pad[IO_CACHELINE - sizeof(io::atomic<size_t>) > 0
+            ? IO_CACHELINE - sizeof(io::atomic<size_t>) : 1];
+    };
+
 } // namespace io
 
 
 #pragma endregion // atomic
 
+
+// ============================================================================
+//                         T H R E A D
+// ============================================================================
+
+namespace io {
+    // ============================================================================
+    // Thread
+    // ============================================================================
+    struct Thread {
+        using Fn = void(*)(void*);
+
+        Thread() noexcept = default;
+        Thread(const Thread&) = delete;
+        Thread& operator=(const Thread&) = delete;
+
+        ~Thread() noexcept {
+            if (_running) join();
+        }
+
+        bool start(Fn fn, void* arg = nullptr, unsigned stack_size = 0) noexcept {
+            if (!fn || _running) return false;
+            _fn = fn; _arg = arg;
+
+#if defined(_WIN32) || defined(_WIN64)
+            DWORD tid = 0;
+            _h = ::CreateThread(nullptr, (SIZE_T)stack_size, &Thread::_win_entry, this, 0, &tid);
+            if (!_h) return false;
+            _running = true;
+            return true;
+#else
+            pthread_attr_t attr;
+            if (pthread_attr_init(&attr) != 0) return false;
+            if (stack_size) (void)pthread_attr_setstacksize(&attr, (size_t)stack_size);
+            int rc = pthread_create(&_t, &attr, &Thread::_posix_entry, this);
+            (void)pthread_attr_destroy(&attr);
+            if (rc != 0) return false;
+            _running = true;
+            return true;
+#endif
+        }
+
+        bool join() noexcept {
+            if (!_running) return false;
+#if defined(_WIN32) || defined(_WIN64)
+            ::WaitForSingleObject(_h, INFINITE);
+            ::CloseHandle(_h);
+            _h = nullptr;
+#else
+            (void)pthread_join(_t, nullptr);
+#endif
+            _running = false;
+            return true;
+        }
+
+        bool detach() noexcept {
+            if (!_running) return false;
+#if defined(_WIN32) || defined(_WIN64)
+            ::CloseHandle(_h);
+            _h = nullptr;
+#else
+            (void)pthread_detach(_t);
+#endif
+            _running = false;
+            return true;
+    }
+
+        bool running() const noexcept { return _running; }
+
+        static unsigned max_workers() noexcept {
+#if defined(_WIN32) || defined(_WIN64)
+            DWORD n = ::GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+            return n ? (unsigned)n : 1u;
+#else
+            long n = ::sysconf(_SC_NPROCESSORS_ONLN);
+            return (n > 0) ? (unsigned)n : 1u;
+#endif
+        }
+
+    private:
+#if defined(_WIN32) || defined(_WIN64)
+        static DWORD WINAPI _win_entry(LPVOID p) noexcept {
+            Thread* self = (Thread*)p;
+            self->_fn(self->_arg);
+            return 0;
+        }
+        HANDLE _h = nullptr;
+#else
+        static void* _posix_entry(void* p) noexcept {
+            Thread* self = (Thread*)p;
+            self->_fn(self->_arg);
+            return nullptr;
+        }
+        pthread_t _t{};
+#endif
+
+        Fn _fn = nullptr;
+        void* _arg = nullptr;
+        bool _running = false;
+    }; // struct Thread
+
+    struct ThreadPool {
+        using TaskFn = void(*)(void*);
+
+        struct Task {
+            TaskFn fn;
+            void* arg;
+        };
+
+        ThreadPool() noexcept = default;
+        ThreadPool(const ThreadPool&) = delete;
+        ThreadPool& operator=(const ThreadPool&) = delete;
+
+        ~ThreadPool() noexcept {
+            if (_inited) shutdown(true);
+        }
+
+        // cap MUST be power-of-two (2^k): recommended >= workers*4
+        bool init(unsigned workers, unsigned cap_pow2 = 1024) noexcept {
+            if (_inited || workers == 0 || cap_pow2 == 0 || !is_pow2_(cap_pow2)) return false;
+
+            _cap = cap_pow2;
+            _mask = _cap - 1;
+
+            _cells = (Cell*)::operator new(sizeof(Cell) * (size_t)_cap, std::nothrow);
+            if (!_cells) return false;
+
+            // init sequence numbers
+            for (size_t i = 0; i < (size_t)_cap; ++i) {
+                // placement-new Cell (trivial, but let it be correct for atomics)
+                new (&_cells[i]) Cell();
+                _cells[i].seq.store(i, memory_order_relaxed);
+            }
+
+            _enq.v.store(0, memory_order_relaxed);
+            _deq.v.store(0, memory_order_relaxed);
+            _stop.v.store(0, memory_order_relaxed);
+
+            _threads = (Thread*)::operator new(sizeof(Thread) * workers, std::nothrow);
+            if (!_threads) { destroy_queue_(); return false; }
+
+            _n = workers;
+            _inited = true;
+
+            for (unsigned i = 0; i < _n; ++i) {
+                if (!_threads[i].start(&ThreadPool::_worker_entry, this)) {
+                    shutdown(true);
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // non-blocking: false if stop or full
+        bool submit(TaskFn fn, void* arg = nullptr) noexcept {
+            if (!_inited || !fn) return false;
+            if (_stop.v.load(memory_order_relaxed)) return false;
+            Task t{ fn, arg };
+            return enqueue_(t);
+        }
+
+        // Graceful: stop=1, workers will finish the queue and quit
+        void shutdown(bool wait = true) noexcept {
+            if (!_inited) return;
+
+            _stop.v.store(1, memory_order_release);
+
+            if (wait) {
+                for (unsigned i = 0; i < _n; ++i) (void)_threads[i].join();
+            }
+            else {
+                for (unsigned i = 0; i < _n; ++i) (void)_threads[i].detach();
+            }
+
+            if (_threads) { ::operator delete(_threads); _threads = nullptr; }
+            destroy_queue_();
+
+            _n = 0; _cap = 0; _mask = 0;
+            _inited = false;
+            }
+
+        unsigned worker_count() const noexcept { return _n; }
+        unsigned capacity() const noexcept { return _cap; }
+
+    private:
+        struct Cell {
+            io::atomic<size_t> seq{ 0 };
+            Task task{ nullptr, nullptr };
+        };
+
+        static void _worker_entry(void* p) noexcept {
+            ((ThreadPool*)p)->worker_loop_();
+        }
+
+        void worker_loop_() noexcept {
+            Task t{ nullptr, nullptr };
+            Backoff b;
+            for (;;) {
+                if (dequeue_(t)) {
+                    b.reset();
+                    t.fn(t.arg);
+                    continue;
+                }
+
+                // queue empty
+                if (_stop.v.load(memory_order_acquire)) {
+                    // guarantee that it is empty fr: double-check
+                    if (!dequeue_(t)) return;
+                    // if suddenly appears — do and continue
+                    b.reset();
+                    t.fn(t.arg);
+                    continue;
+                }
+
+                b.relax();
+            }
+        }
+
+        bool enqueue_(const Task& t) noexcept {
+            size_t pos = _enq.v.load(memory_order_relaxed);
+
+            for (;;) {
+                Cell* c = &_cells[pos & _mask];
+                size_t seq = c->seq.load(memory_order_acquire);
+                intptr_t dif = (intptr_t)seq - (intptr_t)pos;
+
+                if (dif == 0) {
+                    size_t expected = pos;
+                    if (_enq.v.compare_exchange_strong(expected, pos + 1,
+                        memory_order_relaxed, memory_order_relaxed)) {
+                        c->task = t;                         // publish data
+                        c->seq.store(pos + 1, memory_order_release);
+                        return true;
+                }
+                    pos = expected;
+                }
+                else if (dif < 0) {
+                    return false; // full
+                }
+                else {
+                    pos = _enq.v.load(memory_order_relaxed);
+                }
+            }
+        }
+
+        bool dequeue_(Task& out) noexcept {
+            size_t pos = _deq.v.load(memory_order_relaxed);
+
+            for (;;) {
+                Cell* c = &_cells[pos & _mask];
+                size_t seq = c->seq.load(memory_order_acquire);
+                intptr_t dif = (intptr_t)seq - (intptr_t)(pos + 1);
+
+                if (dif == 0) {
+                    size_t expected = pos;
+                    if (_deq.v.compare_exchange_strong(expected, pos + 1,
+                        memory_order_relaxed, memory_order_relaxed)) {
+                        out = c->task;                       // consume data
+                        c->seq.store(pos + _cap, memory_order_release);
+                        return true;
+                    }
+                    pos = expected;
+                }
+                else if (dif < 0) {
+                    return false; // empty
+                }
+                else {
+                    pos = _deq.v.load(memory_order_relaxed);
+                }
+            }
+        }
+
+        static bool is_pow2_(unsigned x) noexcept {
+            return (x & (x - 1u)) == 0u;
+        }
+
+        void destroy_queue_() noexcept {
+            if (_cells) {
+                // Cell is trivial, call destructor anyway for sure
+                ::operator delete(_cells);
+                _cells = nullptr;
+            }
+        }
+
+    private:
+        Thread* _threads = nullptr;
+        unsigned _n = 0;
+
+        Cell* _cells = nullptr;
+        unsigned _cap = 0;
+        unsigned _mask = 0;
+
+        PaddedSizeT _enq{ 0 };
+        PaddedSizeT _deq{ 0 };
+        struct IO_ALIGN(IO_CACHELINE) StopFlag {
+            io::atomic<int> v{ 0 };
+            unsigned char pad[IO_CACHELINE - sizeof(io::atomic<int>) > 0
+                ? IO_CACHELINE - sizeof(io::atomic<int>) : 1];
+        } _stop;
+
+        bool _inited = false;
+    }; // struct ThreadPool
+} // namespace io
 
 // ============================================================================
 //                           S Y S C A L L S
@@ -1070,8 +1440,12 @@ namespace native {
     struct spin_mutex {
         atomic<u32> state{ 0 };
         void lock() noexcept {
-            while (state.exchange(1, memory_order_acq_rel) == 1) {
-                // optional: cpu_relax() / yield syscall
+            Backoff b;
+            for (;;) {
+                if (state.load(memory_order_relaxed) == 0 &&
+                    state.exchange(1, memory_order_acq_rel) == 0)
+                    return;
+                b.relax();
             }
         }
         void unlock() noexcept { state.store(0, memory_order_release); }
@@ -3101,7 +3475,7 @@ namespace native {
         if (!fstatat_basic(h->fd, name_cstr, k_at_symlink_nofollow, mode, sz)) {
             out_type = file_type::unknown;
             out_size = 0;
-            return true; // still “ok”, just unknown
+            return true; // still "ok", just unknown
         }
         out_type = type_from_mode(mode);
         out_size = sz;
@@ -3723,6 +4097,7 @@ void* IO_CDECL operator new(io::usize bytes) {
 #else
     trap();
 #endif
+    return nullptr;
 }
 void* IO_CDECL operator new[](io::usize bytes) { return ::operator new(bytes); }
 

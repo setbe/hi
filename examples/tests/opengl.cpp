@@ -27,7 +27,6 @@ struct TestWindow : public hi::Window<TestWindow> {
 
     TestWindow() noexcept {
         setTitle(IO_U8("Interactive test: press Y to start, N to fail"));
-        setGlCore(2, 0);
         st.last_w = width();
         st.last_h = height();
     }
@@ -50,8 +49,6 @@ struct TestWindow : public hi::Window<TestWindow> {
     }
 
     void onScroll(float dx, float dy) noexcept override {
-        // У тебе на Win: onScroll(delta/120.f, 0.f) — тобто "dx" це wheel.
-        // На X11 ти давав +/-1.f теж в dx.
         const float v = dx != 0.f ? dx : dy;
         if (v > 0.f) st.scroll_up = true;
         if (v < 0.f) st.scroll_down = true;
@@ -128,14 +125,10 @@ TEST_CASE("hi interactive: mouse/resize/scroll/focus", "[hi][window][interactive
 
 }
 
-IO_CONSTEXPR_VAR io::u8 GL_CORE_MAJOR = 3;
-IO_CONSTEXPR_VAR io::u8 GL_CORE_MINOR = 3;
-
 struct SmokeWindow : public hi::Window<SmokeWindow> {
     bool gl_ok = true;
     SmokeWindow() noexcept {
         setTitle(IO_U8("GL smoke test..."));
-        setGlCore(GL_CORE_MAJOR, GL_CORE_MINOR);
         if (api() != hi::RendererApi::Opengl) gl_ok = false;
     }
     void onRender() noexcept override {}
@@ -145,6 +138,9 @@ struct SmokeWindow : public hi::Window<SmokeWindow> {
         io::sleep_ms(5000);
     }
 };
+
+IO_CONSTEXPR_VAR io::u8 GL_CORE_MAJOR = 3;
+IO_CONSTEXPR_VAR io::u8 GL_CORE_MINOR = 3;
 
 TEST_CASE("gl loader smoke: functions callable", "[gl][smoke]") {
     SmokeWindow w{};
@@ -178,7 +174,7 @@ TEST_CASE("gl loader smoke: functions callable", "[gl][smoke]") {
     X(Viewport,              (0,0,16,16),               2) \
     X(GenBuffers,            (0, (io::u32*)nullptr),    2) \
     X(GenTextures,           (0, (io::u32*)nullptr),    2) \
-    X(ActiveTexture,         (gl::texture_unit._0),     2) \
+    X(ActiveTexture,         (gl::TexUnit::_0),     2) \
     /* ... add rest no state functions */ \
     X(BindVertexArray,       (0),                       3) \
     X(GenVertexArrays,       (0, (io::u32*)nullptr),    3)

@@ -11,6 +11,8 @@
 #include "internal/cjk.hpp"
 #include "internal/kana.hpp"
 #include "internal/jouyou_kanji.hpp"
+#include "internal/hangul.hpp"
+#include "internal/misc.hpp"
 
 namespace stbtt_codepoints {
     // ========================================================================
@@ -24,9 +26,11 @@ namespace stbtt_codepoints {
         Arabic,
         Hebrew,
         Devanagari,
-        CJK,        // attention: large
-        Kana,       // Japanese: Hiragana + Katakana
+        CJK,         // Unicode UTF-8 encoding standard for Asian character set
+        Kana,        // Japanese: Hiragana + Katakana
         JouyouKanji, // Japanese: common-use kanji
+        Hangul,
+        Misc,
     };
 
     static constexpr internal::ScriptDescriptor GetScriptDescriptor(Script s) noexcept {
@@ -41,6 +45,8 @@ namespace stbtt_codepoints {
         case Script::CJK:         return internal::Cjk;
         case Script::Kana:        return internal::Kana;
         case Script::JouyouKanji: return internal::JouyouKanji;
+        case Script::Hangul:      return internal::Hangul;
+        case Script::Misc:        return internal::Misc;
         default:                  return internal::Latin;
         }
     }
