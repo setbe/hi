@@ -14,15 +14,6 @@ struct MainWindow : public hi::Window<MainWindow> {
     float move_offset_x{ 10.f };
     float move_offset_y{ 5.f };
 
-    // mouse
-    float mouse_x = 0.f;
-    float mouse_y = 0.f;
-    bool  mouse_down = false;
-    bool  prev_mouse_down = false;
-
-    bool is_cursor{ true };
-    bool is_fullscreen{ false };
-
     hi::AtlasId world_atlas{ -1 };
     hi::AtlasId jp_atlas{ -1 };
     hi::AtlasId kr_atlas{ -1 };
@@ -40,38 +31,19 @@ struct MainWindow : public hi::Window<MainWindow> {
     void onKeyDown(hi::Key k) noexcept override {
         using K = hi::Key;
         switch (k) {
-        case K::_1: is_cursor = !is_cursor;         setCursorVisible(is_cursor);  break;
-        case K::_2: is_fullscreen = !is_fullscreen; setFullscreen(is_fullscreen); break;
-
         case K::Right: move_offset_x += text_scale; break;
         case K::Left:  move_offset_x -= text_scale; break;
         case K::Down:  move_offset_y += text_scale; break;
         case K::Up:    move_offset_y -= text_scale; break;
-
-        case K::MouseRight:
-        case K::MouseLeft: mouse_down = true; break;
         }
     }
 
     void onKeyUp(hi::Key k) noexcept override {
         using K = hi::Key;
         switch (k) {
-        case K::_1: is_cursor = !is_cursor;         setCursorVisible(is_cursor);  break;
-        case K::_2: is_fullscreen = !is_fullscreen; setFullscreen(is_fullscreen); break;
-
-        case K::Right: move_offset_x += text_scale; break;
-        case K::Left:  move_offset_x -= text_scale; break;
-        case K::Down:  move_offset_y += text_scale; break;
-        case K::Up:    move_offset_y -= text_scale; break;
-
-        case K::MouseRight:
-        case K::MouseLeft: mouse_down = false; break;
+        case K::_1: setCursorVisible(!isCursorVisible()); break;
+        case K::_2: setFullscreen(!isFullscreen()); break;
         }
-    }
-
-    void onMouseMove(int x, int y) noexcept override {
-        mouse_x = (float)x;
-        mouse_y = (float)y;
     }
 
     void onScroll(float deltaX, float deltaY) noexcept override {
@@ -89,9 +61,6 @@ struct MainWindow : public hi::Window<MainWindow> {
         gl::ClearColor(red, 0.f, 0.f, 0.f);
         gl::Clear(gl::buffer_bit.Color | gl::buffer_bit.Depth);
 
-
-        const bool mouse_released = (prev_mouse_down && !mouse_down);
-
         hi::ButtonDraw btn{};
         btn.atlas = world_atlas;
         btn.dock = hi::TextDock::TopC;
@@ -102,7 +71,7 @@ struct MainWindow : public hi::Window<MainWindow> {
         btn.style.hover = hi::TextStyle{ 1.f,  1.f, 0.7f, 1.f, true, 0.f, 0.f, 0.f, 1.f, /*.outline_px*/1.2f, /*.softness_px*/0.9f };
         btn.style.active = hi::TextStyle{0.7f, 1.f, 0.7f, 1.f, true, 0.f, 0.f, 0.f, 1.f, /*.outline_px*/2.0f, /*.softness_px*/0.9f };
 
-        auto st = Button(btn, mouse_x, mouse_y, mouse_down, mouse_released);
+        auto st = Button(btn);
         if (st.clicked) {
             setTitle(IO_U8("Clicked!"));
         }
@@ -211,8 +180,6 @@ struct MainWindow : public hi::Window<MainWindow> {
         //this->DrawText(td);
 
         this->FlushText();
-
-        prev_mouse_down = mouse_down;
     }
 
     bool LoadResources() noexcept {

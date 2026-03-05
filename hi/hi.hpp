@@ -331,14 +331,16 @@ namespace native {
 } // namespace native
 
 struct IWindow {
+    friend struct native::Window;
+
     // --- Derived Events ---
     virtual void onRender() noexcept = 0;
-    virtual void onError(Error e, AboutError ae) noexcept = 0;
+    virtual void onError(Error, AboutError) noexcept = 0;
     virtual void onScroll(float deltaX, float deltaY) noexcept = 0;
     virtual void onWindowResize(int width, int height) noexcept = 0;
     virtual void onMouseMove(int x, int y) noexcept = 0;
-    virtual void onKeyDown(Key k) noexcept = 0;
-    virtual void onKeyUp(Key k) noexcept = 0;
+    virtual void onKeyDown(Key) noexcept = 0;
+    virtual void onKeyUp(Key) noexcept = 0;
     virtual void onFocusChange(bool gained) noexcept = 0;
     // --- Defined by library ---
     virtual void Render() noexcept = 0;
@@ -351,6 +353,19 @@ struct IWindow {
     IO_NODISCARD virtual const native::Window& native() const noexcept = 0;
     IO_NODISCARD virtual int width() const noexcept = 0;
     IO_NODISCARD virtual int height() const noexcept = 0;
+    IO_NODISCARD virtual float mouseX() const noexcept = 0;
+    IO_NODISCARD virtual float mouseY() const noexcept = 0;
+    IO_NODISCARD virtual bool isShown() const noexcept = 0;
+    IO_NODISCARD virtual bool isFullscreen() const noexcept = 0;
+    IO_NODISCARD virtual bool isCursorVisible() const noexcept = 0;
+    IO_NODISCARD virtual bool isMouseDown() const noexcept = 0;
+    IO_NODISCARD virtual bool isPrevMouseDown() const noexcept = 0;
+    IO_NODISCARD virtual float elementScale() const noexcept = 0;
+
+protected:
+    virtual void setMouseX(float) noexcept = 0;
+    virtual void setMouseY(float) noexcept = 0;
+    virtual void setMouseDown(bool) noexcept = 0;
 }; // IWindow
 
 namespace native {
@@ -385,6 +400,11 @@ namespace native {
             inline void setFullscreen(bool) const noexcept;
             inline void setCursorVisible(bool) const noexcept;
 
+            static void handleMouseButton(IWindow* w, bool pressed) noexcept { w->setMouseDown(pressed); }
+            static void handleMouseMove(IWindow* w, int x, int y) noexcept {
+                w->setMouseX(static_cast<float>(x)); w->setMouseY(static_cast<float>(y));
+            }
+
         public:
 #ifdef IO_IMPLEMENTATION
 #       if defined(__linux__)
@@ -397,7 +417,7 @@ namespace native {
             void setHwnd(HWND new_hwnd) noexcept { _hwnd = new_hwnd; }
 #       endif
 #endif // IO_IMPLEMENTATION
-        }; // struct Window
+    }; // struct Window
 
 // WinApi Window
 #if defined(IO_IMPLEMENTATION) && defined(_WIN32)
@@ -624,7 +644,13 @@ namespace native {
                 PostMessageW(hwnd, WM_PAINT, 0, 0);
                 return 0; // handled
             } // WM_SIZE
-            case WM_MOUSEMOVE: win->onMouseMove(LOWORD(lparam), HIWORD(lparam)); return 0;
+            case WM_MOUSEMOVE: {
+                int mouseX = LOWORD(lparam);
+                int mouseY = HIWORD(lparam);
+                ::hi::native::Window::handleMouseMove(win, mouseX, mouseY);
+                win->onMouseMove(mouseX, mouseY);
+                return 0;
+            }
             case WM_SETFOCUS:  win->onFocusChange(true); return 0;
             case WM_KILLFOCUS: win->onFocusChange(false); return 0;
             case WM_MOUSEWHEEL: {
@@ -646,22 +672,16 @@ namespace native {
                 else if (wparam == VK_MENU) win->onKeyUp(Key::Alt);
                 return 0;
 
-            case WM_LBUTTONDOWN:
-                SetCapture(hwnd);
-                win->onKeyDown(Key::MouseLeft);
-                return 0;
-            case WM_LBUTTONUP:
-                ReleaseCapture();
-                win->onKeyUp(Key::MouseLeft);
-                return 0;
-
             // --- mouse ---
-            case WM_RBUTTONDOWN: SetCapture(hwnd); win->onKeyDown(Key::MouseRight); return 0;
-            case WM_RBUTTONUP: ReleaseCapture(); win->onKeyUp(Key::MouseRight); return 0;
-            case WM_MBUTTONDOWN: SetCapture(hwnd); win->onKeyDown(Key::MouseMiddle); return 0;
-            case WM_MBUTTONUP: ReleaseCapture(); win->onKeyUp(Key::MouseMiddle); return 0;
+            case WM_LBUTTONDOWN: SetCapture(hwnd); ::hi::native::Window::handleMouseButton(win, true);  win->onKeyDown(Key::MouseLeft);   return 0;
+            case WM_LBUTTONUP:   ReleaseCapture(); ::hi::native::Window::handleMouseButton(win, false); win->onKeyUp(Key::MouseLeft);     return 0;
+            case WM_RBUTTONDOWN: SetCapture(hwnd); ::hi::native::Window::handleMouseButton(win, true);  win->onKeyDown(Key::MouseRight);  return 0;
+            case WM_RBUTTONUP:   ReleaseCapture(); ::hi::native::Window::handleMouseButton(win, false); win->onKeyUp(Key::MouseRight);    return 0;
+            case WM_MBUTTONDOWN: SetCapture(hwnd); ::hi::native::Window::handleMouseButton(win, true);  win->onKeyDown(Key::MouseMiddle); return 0;
+            case WM_MBUTTONUP:   ReleaseCapture(); ::hi::native::Window::handleMouseButton(win, false); win->onKeyUp(Key::MouseMiddle);   return 0;
             case WM_XBUTTONDOWN: {
                 SetCapture(hwnd);
+                ::hi::native::Window::handleMouseButton(win, true);
                 const WORD xb = GET_XBUTTON_WPARAM(wparam); // XBUTTON1 or XBUTTON2
                 if (xb == XBUTTON1) win->onKeyDown(Key::MouseX1);
                 else                win->onKeyDown(Key::MouseX2);
@@ -669,6 +689,7 @@ namespace native {
             }
             case WM_XBUTTONUP: {
                 ReleaseCapture();
+                ::hi::native::Window::handleMouseButton(win, false);
                 const WORD xb = GET_XBUTTON_WPARAM(wparam);
                 if (xb == XBUTTON1) win->onKeyUp(Key::MouseX1);
                 else                win->onKeyUp(Key::MouseX2);
@@ -859,6 +880,7 @@ namespace glx {
 
                 case MotionNotify:
                     // optional coalesce motion too
+                    ::hi::native::Window::handleMouseMove(win, e.xmotion.x, e.xmotion.y);
                     win.onMouseMove(e.xmotion.x, e.xmotion.y);
                     break;
 
@@ -866,9 +888,38 @@ namespace glx {
                 case FocusOut: win.onFocusChange(false); break;
 
                 case ButtonPress:
-                    if      (e.xbutton.button == Button4) win.onScroll(0.f, +1.f);
-                    else if (e.xbutton.button == Button5) win.onScroll(0.f, -1.f);
+                case ButtonRelease: {
+                    const bool pressed = (e.type == ButtonPress);
+                    switch (e.xbutton.button) {
+                    case Button1:
+                        native::Window::handleMouseButton(&win, pressed);
+                        if (pressed) win.onKeyDown(Key::MouseLeft); else win.onKeyUp(Key::MouseLeft);
+                        break;
+                    case Button2:
+                        native::Window::handleMouseButton(&win, pressed);
+                        if (pressed) win.onKeyDown(Key::MouseMiddle); else win.onKeyUp(Key::MouseMiddle);
+                        break;
+                    case Button3:
+                        native::Window::handleMouseButton(&win, pressed);
+                        if (pressed) win.onKeyDown(Key::MouseRight); else win.onKeyUp(Key::MouseRight);
+                        break;
+                    case Button4: if (pressed) win.onScroll(0.f, +1.f); break; // wheel up
+                    case Button5: if (pressed) win.onScroll(0.f, -1.f); break; // wheel down
+                        // Button6/7 = horizontal wheel on some systems
+                    case 6: if (pressed) win.onScroll(-1.f, 0.f); break;
+                    case 7: if (pressed) win.onScroll(+1.f, 0.f); break;
+                        // XButton1/XButton2 often are 8/9
+                    case 8:
+                        native::Window::handleMouseButton(&win, pressed);
+                        if (pressed) win.onKeyDown(Key::MouseX1); else win.onKeyUp(Key::MouseX1);
+                        break;
+                    case 9:
+                        native::Window::handleMouseButton(&win, pressed);
+                        if (pressed) win.onKeyDown(Key::MouseX2); else win.onKeyUp(Key::MouseX2);
+                        break;
+                    }
                     break;
+                }
 
                 case KeyPress:
                 case KeyRelease: {
@@ -2230,11 +2281,13 @@ namespace internal {
     // --- CRTP base ---
     template <typename Derived>
     struct Window : public IWindow {
+        friend struct native::Window;
     public:
         union { native::Opengl g; };
 
         explicit inline Window(int w = 440, int h = 320, bool shown = true, bool bordless = false) noexcept
-            : _width{ w }, _height{ h }, _native_window{ *this,w,h,shown,bordless }, _ctx{ *this, 3, 3 } 
+            : _width{ w }, _height{ h }, _shown{ shown },
+            _native_window{ *this, w, h, shown, bordless }, _ctx{ *this, 3, 3 }
         {
             static const gl::Attr attrs[] = {
                 gl::AttrOf<float>(2),  // pos
@@ -2273,26 +2326,41 @@ namespace internal {
         IO_NODISCARD inline const native::Window& native() const noexcept override { return _native_window; }
         IO_NODISCARD inline int width() const noexcept override { return _width; }
         IO_NODISCARD inline int height() const noexcept override { return _height; }
+        IO_NODISCARD inline float mouseX() const noexcept override { return _mouse_x; }
+        IO_NODISCARD inline float mouseY() const noexcept override { return _mouse_y; }
+        IO_NODISCARD inline bool isShown() const noexcept override { return _shown; }
+        IO_NODISCARD inline bool isFullscreen() const noexcept override { return _fullscreen; }
+        IO_NODISCARD inline bool isCursorVisible() const noexcept override { return _cursor; }
+        IO_NODISCARD inline bool isMouseDown() const noexcept override { return _mouse_down; }
+        IO_NODISCARD inline bool isPrevMouseDown() const noexcept override { return _prev_mouse_down; }
+        IO_NODISCARD inline float elementScale() const noexcept override { return _element_scale; }
         inline void onGeometryChange(int w, int h) noexcept override;
 
+        IO_NODISCARD inline bool isMouseReleased() const noexcept { return _mouse_released; }
+
     public:
-        IO_NODISCARD inline bool PollEvents() const noexcept {
+        IO_NODISCARD inline bool PollEvents() noexcept {
+            const bool prev = _mouse_down;
+
             // const Window<Derived>* -> IWindow&
             auto* self_nc = const_cast<Window<Derived>*>(this);
-            return native().PollEvents(static_cast<IWindow&>(*self_nc));
+            const bool running = native().PollEvents(static_cast<IWindow&>(*self_nc));
+
+            _mouse_released = (prev && !_mouse_down);
+            _prev_mouse_down = prev;
+            return running;
         }
         inline void Render() noexcept override;
         inline void SwapBuffers() const noexcept;
 
         // Font files: stores path, checks file exists
-        FontId LoadFont(io::char_view ttf_path) noexcept; // 
+        FontId LoadFont(io::char_view ttf_path) noexcept;
         // Plan/Build atlas (load TTF bytes, plan, build, upload texture)
         AtlasId GenerateFontAtlas(FontId font_id, const FontAtlasDesc& desc) noexcept;
         template<typename... Scripts>
         AtlasId GenerateFontAtlas(FontId font_id, const FontAtlasDesc& desc, Scripts... scripts) noexcept;
         
-        ButtonState Button(const ButtonDraw& b, float mouse_x, float mouse_y,
-                           bool mouse_down, bool mouse_released) noexcept;
+        ButtonState Button(const ButtonDraw& b) noexcept;
         
         // Immediate text
         void DrawText(const TextDraw& d) noexcept;
@@ -2300,33 +2368,50 @@ namespace internal {
         void FlushText() noexcept;
 
         // --- Setters ---
-        inline void setShow(bool value) const noexcept { native().setShow(value); }
+        inline void setShow(bool value) noexcept { _shown = value; native().setShow(value); }
         inline void setTitle(io::char_view new_title) const noexcept { native().setTitle(new_title); }
-        inline void setFullscreen(bool value) const noexcept { native().setFullscreen(value); }
-        inline void setCursorVisible(bool value) const noexcept { native().setCursorVisible(value); }
+        inline void setFullscreen(bool value) noexcept { _fullscreen = value; native().setFullscreen(value); }
+        inline void setCursorVisible(bool value) noexcept { _cursor = value; native().setCursorVisible(value); }
+        inline void setElementScale(float value) noexcept { _element_scale = value; }
 
         inline io::u16 getAtlasSide(AtlasId id) const noexcept { return (id<0) ? 0 : (id>=(int)_atlases.size()) ? 0 : _atlases[id].atlas_side;   }
 
+    protected:
+        inline void setMouseX(float v) noexcept override { _mouse_x = v; }
+        inline void setMouseY(float v) noexcept override { _mouse_y = v; }
+        inline void setMouseDown(bool v) noexcept override { _mouse_down = v; }
+
     private:
+        // --- window ---
         native::Window _native_window;
         int _width;
         int _height;
+
+        // --- mouse ---
+        float _mouse_x = 0.f;
+        float _mouse_y = 0.f;
+        bool  _mouse_down = false;
+        bool  _prev_mouse_down = false;
+        bool  _mouse_released = true;
+
+        // --- window params ---
+        bool _cursor = true;
+        bool _fullscreen = false;
+        bool _shown;
+        float _element_scale{ 1.f };
         ContextGuardT<Window> _ctx; // RAII context
 
+        // --- text ---
         bool _text_mesh_ready = false;
-        
         struct text_cmd {
             AtlasId atlas;
             io::u32 first;
             io::u32 count;
         };
-
         gl::VertexArray _text_vao;
         gl::Buffer      _text_vbo{ gl::BufferTarget::ArrayBuffer };
-
         io::vector<io::string> _font_paths;
         io::vector<internal::font_atlas> _atlases;
-            
         internal::text_queue _textq;
     }; // struct Window
 
@@ -2535,12 +2620,14 @@ namespace internal {
 
 
     template <typename Derived>
-    inline ButtonState Window<Derived>::Button(const ButtonDraw& b, float mx, float my,
-        bool mouse_down, bool mouse_released) noexcept
-    {
+    inline ButtonState Window<Derived>::Button(const ButtonDraw& b) noexcept {
         ButtonState out{};
         if (b.atlas < 0 || (io::u32)b.atlas >= _atlases.size()) return out;
         const internal::font_atlas& A = _atlases[(io::u32)b.atlas];
+
+        const float mx = this->mouseX();
+        const float my = this->mouseY();
+        const bool mouse_released = this->isMouseReleased();
 
         // 1) collect temporary TextDraw for measurement/drawing
         TextDraw td{};
@@ -2581,7 +2668,7 @@ namespace internal {
 
         // 3) hit test
         out.hovered = (mx >= x0 && mx <= x1 && my >= y0 && my <= y1);
-        out.held = out.hovered && mouse_down;
+        out.held = out.hovered && _mouse_down;
         out.clicked = out.hovered && mouse_released; // release inside
 
         // 4) style
