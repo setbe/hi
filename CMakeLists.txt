@@ -230,7 +230,7 @@ function(hi_apply_freestanding target)
     # linux: hosted link
     if(UNIX AND NOT APPLE AND _hosted)
         target_link_options(${target} PRIVATE
-            $<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>>:${unix_hosted_link_opts}>
+            $<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>>:${unix_hosted_link_opt}>
         )
     endif()
 endfunction()
