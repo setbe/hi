@@ -1,6 +1,6 @@
 ﻿#define IO_IMPLEMENTATION
 #include "../hi/hi.hpp"
-#include "../3rd_party/stb_truetype_stream/codepoints/stbtt_codepoints_stream.hpp"
+#include "../3rd_party/stb/stb_truetype_stream/codepoints/stbtt_codepoints_stream.hpp"
 
 static const char* FONT_DIR{ "../resources/noto/" };
 static const char* FONT_FILENAME_WORLD{ "NotoSans-Regular.ttf" };

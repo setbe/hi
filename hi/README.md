@@ -25,7 +25,7 @@ Install:
 
 ### Clone repository
 ```
-git clone https://github.com/setbe/hi.git
+git clone --recurse-submodules https://github.com/setbe/hi.git
 cd hi
 ```
 

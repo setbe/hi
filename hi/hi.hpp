@@ -1,7 +1,7 @@
 #include "io.hpp"
 #include "gl_loader.hpp"
-#include "../3rd_party/stb_truetype_stream/stb_truetype_stream.hpp"
-#include "../3rd_party/stb_truetype_stream/codepoints/stbtt_codepoints_stream.hpp"
+#include "../3rd_party/stb/stb_truetype_stream/stb_truetype_stream.hpp"
+#include "../3rd_party/stb/stb_truetype_stream/codepoints/stbtt_codepoints_stream.hpp"
 
 #ifdef IO_IMPLEMENTATION
 #   if defined(_WIN32)

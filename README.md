@@ -105,6 +105,10 @@ struct MainWindow : public hi::Window<MainWindow> {
 };
 ```
 
+## Building
+
+See [README.md at "hi/"](hi/) for more info.
+
 ## Testing
 
 The project includes extensive Catch2 tests covering:
