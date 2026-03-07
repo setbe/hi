@@ -2771,13 +2771,11 @@ namespace native {
 
     template<usize N>
     struct StackOut : OutT<BufferSink<N>> {
+        IO_NODISCARD IO_CONSTEXPR usize value_type() const noexcept { return N; }
         using Base = OutT<BufferSink<N>>;
         BufferSink<N> storage{};
 
         StackOut() noexcept : Base(storage) {}
-
-        inline char_view view() const noexcept { return storage.view(); }
-        inline void reset() noexcept { storage.reset(); }
     };
 
     template<usize N>
@@ -3645,6 +3643,16 @@ namespace fs {
     IO_CONSTEXPR_VAR char sep = '/';
 #endif
 
+    template<io::usize N>
+    static void path_join(io::char_view base, io::char_view leaf, io::StackOut<N>& out) noexcept {
+        out.write(base.data(), base.size());
+
+        const char last = out.storage.view()[out.storage.view().size() - 1];
+        if (last != '/' && last != '\\') {
+            out.write(&fs::sep, 1);
+        }
+        return out.write(leaf.data(), leaf.size());
+    }
     static bool path_join(io::char_view base, io::char_view leaf, io::string& out) noexcept {
        out.clear();
        if (!out.append(base)) return false;

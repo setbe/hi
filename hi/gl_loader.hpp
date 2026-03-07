@@ -816,6 +816,7 @@ namespace gl {
             return true;
         }
 
+        inline explicit Shader(io::u32 ready_program) noexcept : _id_program{ ready_program } {}
         inline explicit Shader() noexcept = default;
         inline explicit Shader(const char* vert, const char* frag) noexcept { Compile(vert, frag); }
         inline ~Shader() noexcept { gl::DeleteProgram(_id_program); }
@@ -831,7 +832,7 @@ namespace gl {
 
         inline void Use() const noexcept { gl::UseProgram(_id_program); }
 
-
+        // caller must gl::DeleteShader
         static inline bool compile_shader(io::u32& out_sh, gl::ShaderType type, const char* src) noexcept {
             out_sh = gl::CreateShader(type);
             if (!out_sh) return false;

@@ -1059,11 +1059,6 @@ namespace glx {
             HGLRC glc = getHglrc();
 
             BeginPaint(wnd, &ps);
-
-            if (wglGetCurrentContext() != glc ||
-                wglGetCurrentDC() != dc) {
-                wglMakeCurrent(dc, glc);
-            }
             win.onRender();
 
             EndPaint(wnd, &ps);
