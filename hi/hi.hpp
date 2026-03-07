@@ -2104,8 +2104,8 @@ namespace internal {
         bool  any;
     };
 
-    static inline text_bbox measure_text_bbox_px(const font_atlas& A, const TextDraw& d) noexcept {
-        const float scale = d.scale;
+    static inline text_bbox measure_text_bbox_px(const font_atlas& A, const TextDraw& d, float element_scale) noexcept {
+        const float scale = d.scale * element_scale;
         const float line_px = (float)A.pixel_height * scale * ((d.line_height <= 0.f) ? 1.f : d.line_height);
         const float space_px = line_px * 0.5f;
         const float tab_px = space_px * ((d.tab_width <= 0.f) ? 4.f : d.tab_width);
@@ -2481,7 +2481,7 @@ namespace internal {
 
         float ax, ay; internal::dock_anchor_px(d.dock, vw, vh, ax, ay);
 
-        const auto bb = internal::measure_text_bbox_px(A, d);
+        const auto bb = internal::measure_text_bbox_px(A, d, _element_scale);
 
         float dx, dy; internal::dock_align_shift(d.dock, bb, dx, dy);
 
@@ -2489,7 +2489,7 @@ namespace internal {
         const float origin_y = ay + d.y + dy;
 
         // ---- existing layout (but use origin_*) ----
-        const float scale = d.scale;
+        const float scale = d.scale * _element_scale;
         const float line_px = (float)A.pixel_height * scale * ((d.line_height <= 0.f) ? 1.f : d.line_height);
         const float space_px = line_px * 0.5f;
         const float tab_px = space_px * ((d.tab_width <= 0.f) ? 4.f : d.tab_width);
@@ -2647,7 +2647,7 @@ namespace internal {
         float ax = 0, ay = 0;
         internal::dock_anchor_px(b.dock, vw, vh, ax, ay);
 
-        const auto bb = internal::measure_text_bbox_px(A, td);
+        const auto bb = internal::measure_text_bbox_px(A, td, _element_scale);
 
         float dx = 0, dy = 0;
         internal::dock_align_shift(b.dock, bb, dx, dy);
