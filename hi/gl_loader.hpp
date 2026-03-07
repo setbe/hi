@@ -778,7 +778,7 @@ namespace gl {
             GetShaderiv(V, ShaderProperty::CompileStatus, &success);
             if (!success) {
                 GetShaderInfoLog(V, 512, nullptr, info);
-                io::out << "shader compile failed: " << info << io::out.endl;
+                io::out << "shader compile failed: " << info << '\n';
                 DeleteShader(V);
                 return false;
             }
@@ -789,7 +789,7 @@ namespace gl {
             GetShaderiv(F, ShaderProperty::CompileStatus, &success);
             if (!success) {
                 GetShaderInfoLog(F, 512, nullptr, info);
-                io::out << "fshader compile failed: " << info << io::out.endl;
+                io::out << "fshader compile failed: " << info << '\n';
                 DeleteShader(V);
                 DeleteShader(F);
                 return false;
@@ -802,7 +802,7 @@ namespace gl {
             GetProgramiv(P, ProgramProperty::LinkStatus, &success);
             if (!success) {
                 GetProgramInfoLog(P, 512, nullptr, info);
-                ::io::out << "shader link failed: " << info << ::io::out.endl;
+                ::io::out << "shader link failed: " << info << '\n';
                 DeleteShader(V);
                 DeleteShader(F);
                 DeleteProgram(P);
@@ -843,7 +843,7 @@ namespace gl {
             if (!ok) {
                 char log[512]{};
                 gl::GetShaderInfoLog(out_sh, (int)sizeof(log)-1, nullptr, log);
-                io::out << "shader compile failed: " << log << io::out.endl;
+                io::out << "shader compile failed: " << log << '\n';
                 gl::DeleteShader(out_sh);
                 out_sh = 0;
                 return false;
@@ -863,7 +863,7 @@ namespace gl {
             if (!ok) {
                 char log[512]{};
                 gl::GetProgramInfoLog(out_prog, (int)sizeof(log)-1, nullptr, log);
-                io::out << "program link failed: " << log << io::out.endl;
+                io::out << "program link failed: " << log << '\n';
                 gl::DeleteProgram(out_prog);
                 out_prog = 0;
                 return false;

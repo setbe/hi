@@ -49,9 +49,9 @@ struct MainWindow : public hi::Window<MainWindow> {
     void onScroll(float deltaX, float deltaY) noexcept override {
         text_scale += deltaX;
         text_scale += deltaY;
-        io::out.reset();
-        io::out << "Current scale is " << text_scale << " times";
-        setTitle(io::out.scrap_view());
+        io::StackOut<64> ss;
+        ss << "Current scale is " << text_scale << " times";
+        setTitle(ss.view());
     }
 
     void onRender() noexcept override {
@@ -193,7 +193,7 @@ struct MainWindow : public hi::Window<MainWindow> {
             io::string cwd;
             if (!fs::current_directory(cwd) || !fs::path_join(cwd, FONT_DIR, full_font_path)) return false;
             io::out << "current dir is: " << cwd << '\n'
-                << "searching in directory: " << full_font_path << io::out.endl;
+                << "searching in directory: " << full_font_path << '\n';
         }
 
         io::string current_font;
@@ -210,7 +210,7 @@ struct MainWindow : public hi::Window<MainWindow> {
         if (!load_atlas(FONT_FILENAME_WORLD, world_atlas,
             stbtt_codepoints::Script::Latin,
             stbtt_codepoints::Script::Cyrillic)) return false;
-        io::out << "WORLD atlas side: " << getAtlasSide(world_atlas) << io::out.endl;
+        io::out << "WORLD atlas side: " << getAtlasSide(world_atlas) << '\n';
 
         //// JP
         //if (!load_atlas(FONT_FILENAME_JAPANESE, jp_atlas,
@@ -218,26 +218,26 @@ struct MainWindow : public hi::Window<MainWindow> {
         //    stbtt_codepoints::Script::Kana,
         //    stbtt_codepoints::Script::JouyouKanji,
         //    stbtt_codepoints::Script::CJK)) return false;
-        //io::out << "JP atlas side: " << getAtlasSide(jp_atlas) << io::out.endl;
+        //io::out << "JP atlas side: " << getAtlasSide(jp_atlas) << '\n';
 
         //// KR
         //// TODO: Script::Hangul
         //if (!load_atlas(FONT_FILENAME_KOREAN, kr_atlas,
         //    stbtt_codepoints::Script::Latin,
         //    stbtt_codepoints::Script::CJK)) return false;
-        //io::out << "KR atlas side: " << getAtlasSide(kr_atlas) << io::out.endl;
+        //io::out << "KR atlas side: " << getAtlasSide(kr_atlas) << '\n';
 
         //// TC
         //if (!load_atlas(FONT_FILENAME_TRADITIONAL_CHINESE, tc_atlas,
         //    stbtt_codepoints::Script::Latin,
         //    stbtt_codepoints::Script::CJK)) return false;
-        //io::out << "TC atlas side: " << getAtlasSide(tc_atlas) << io::out.endl;
+        //io::out << "TC atlas side: " << getAtlasSide(tc_atlas) << '\n';
 
         //// SC
         //if (!load_atlas(FONT_FILENAME_SIMPLIFIED_CHINESE, sc_atlas,
         //    stbtt_codepoints::Script::Latin,
         //    stbtt_codepoints::Script::CJK)) return false;
-        //io::out << "SC atlas side: " << getAtlasSide(sc_atlas) << io::out.endl;
+        //io::out << "SC atlas side: " << getAtlasSide(sc_atlas) << '\n';
 
         return true;
     }
