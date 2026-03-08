@@ -322,6 +322,24 @@ namespace hi {
         default: return "unknown error";
         }
     } // what
+
+    enum class Cursor {
+        Arrow,      // Default arrow cursor
+        IBeam,      // Text input cursor
+        Crosshair,  // Crosshair cursor
+        Hand,       // Hand pointer for links/buttons
+        HResize,    // Horizontal resize
+        VResize,    // Vertical resize
+        Hidden      // Invisible cursor
+    };
+    enum class CursorState {
+        None,
+        Default, // Arrow
+        TextEdit, // IBeam
+        HResizing, // HResize
+        VResizing, // VResize
+        HoversButton, // Hand
+    };
 #pragma endregion
 
 namespace native {
@@ -345,6 +363,8 @@ struct IWindow {
     // --- Defined by library ---
     virtual void Render() noexcept = 0;
     virtual void onGeometryChange(int w, int h) noexcept = 0;
+    virtual void setCursor(Cursor) noexcept = 0;
+    virtual void resetCursorState() noexcept = 0;
 
     IO_NODISCARD virtual RendererApi api() const noexcept = 0;
     IO_NODISCARD virtual       native::Opengl& opengl()        noexcept = 0;
@@ -355,12 +375,14 @@ struct IWindow {
     IO_NODISCARD virtual int height() const noexcept = 0;
     IO_NODISCARD virtual float mouseX() const noexcept = 0;
     IO_NODISCARD virtual float mouseY() const noexcept = 0;
+    IO_NODISCARD virtual CursorState getCursorState() const noexcept = 0;
+
     IO_NODISCARD virtual bool isShown() const noexcept = 0;
     IO_NODISCARD virtual bool isFullscreen() const noexcept = 0;
     IO_NODISCARD virtual bool isCursorVisible() const noexcept = 0;
     IO_NODISCARD virtual bool isMouseDown() const noexcept = 0;
     IO_NODISCARD virtual bool isPrevMouseDown() const noexcept = 0;
-    IO_NODISCARD virtual float elementScale() const noexcept = 0;
+    IO_NODISCARD virtual float UiScale() const noexcept = 0;
 
 protected:
     virtual void setMouseX(float) noexcept = 0;
@@ -384,6 +406,7 @@ namespace native {
             HWND _hwnd{ nullptr };
 #       endif
 #endif // IO_IMPLEMENTATION
+        CursorState _last_cursor_st{ CursorState::None };
 
         public:
             inline explicit Window(IWindow& win, int width, int height, bool shown, bool bordless) noexcept;
@@ -398,7 +421,21 @@ namespace native {
             inline void setTitle(io::char_view title) const noexcept;
             inline void setShow(bool) const noexcept;
             inline void setFullscreen(bool) const noexcept;
-            inline void setCursorVisible(bool) const noexcept;
+            inline void setCursor(Cursor c = Cursor::Arrow) const noexcept;
+            inline void setCursor(CursorState cs) const noexcept {
+                switch (cs)
+                {
+                case hi::CursorState::TextEdit: setCursor(hi::Cursor::IBeam); break;
+                case hi::CursorState::HResizing: setCursor(hi::Cursor::HResize); break;
+                case hi::CursorState::VResizing: setCursor(hi::Cursor::VResize); break;
+                case hi::CursorState::HoversButton: setCursor(hi::Cursor::Hand); break;
+                case hi::CursorState::Default: setCursor(hi::Cursor::Arrow); break;
+                default: break;
+                }
+            }
+
+            inline void updateLastCursorState(CursorState cs) noexcept { _last_cursor_st = cs; }
+            inline CursorState getLastCursorState() const noexcept { return _last_cursor_st; }
 
             static void handleMouseButton(IWindow* w, bool pressed) noexcept { w->setMouseDown(pressed); }
             static void handleMouseMove(IWindow* w, int x, int y) noexcept {
@@ -483,7 +520,6 @@ namespace native {
                 return;
             }
         } // Window
-
         inline Window::~Window() noexcept {
             if (_hdc)  ReleaseDC(_hwnd, _hdc);
             if (_hwnd) DestroyWindow(_hwnd);
@@ -533,15 +569,6 @@ namespace native {
                 /*     cx */ mi.rcMonitor.right - mi.rcMonitor.left,
                 /*     cy */ mi.rcMonitor.bottom - mi.rcMonitor.top,
                 /* uFlags */ SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
-        }
-        inline void Window::setCursorVisible(bool value) const noexcept {
-            // Adjusts the cursor visibility to match 'value'.
-            // ShowCursor increments/decrements the internal display counter and returns the new count.
-            int shown = ShowCursor(value);
-            // Keep calling ShowCursor until the cursor's visibility matches the desired state.
-            while ((value && shown < 0) || (!value && shown >= 0)) {
-                shown = ShowCursor(value);
-            }
         }
 
 
@@ -648,6 +675,16 @@ namespace native {
                 int mouseX = LOWORD(lparam);
                 int mouseY = HIWORD(lparam);
                 ::hi::native::Window::handleMouseMove(win, mouseX, mouseY);
+
+                if (win->isCursorVisible()) {
+                    const CursorState cs = win->getCursorState();
+
+                    if (cs != win->native().getLastCursorState()) {
+                        win->native().setCursor(cs);
+                        win->native().updateLastCursorState(cs);
+                    }
+                    win->resetCursorState();
+                }
                 win->onMouseMove(mouseX, mouseY);
                 return 0;
             }
@@ -881,6 +918,17 @@ namespace glx {
                 case MotionNotify:
                     // optional coalesce motion too
                     ::hi::native::Window::handleMouseMove(win, e.xmotion.x, e.xmotion.y);
+
+                    if (win->isCursorVisible()) {
+                        const CursorState cs = win->getCursorState();
+
+                        if (cs != win->native().getLastCursorState()) {
+                            win->native().setCursor(cs);
+                            win->native().updateLastCursorState(cs);
+                        }
+                        win->resetCursorState();
+                    }
+
                     win.onMouseMove(e.xmotion.x, e.xmotion.y);
                     break;
 
@@ -959,38 +1007,91 @@ namespace glx {
     }
 
     inline void native::Window::setShow(bool v) const noexcept {
-    if (!_dpy || !_xwnd) return;
-    if (v) XMapWindow(_dpy, _xwnd);
-    else   XUnmapWindow(_dpy, _xwnd);
-    XFlush(_dpy);
-}
-
-    inline void native::Window::setCursorVisible(bool v) const noexcept {
-    if (!_dpy || !_xwnd) return;
-    if (v) {
-        XUndefineCursor(_dpy, _xwnd);
+        if (!_dpy || !_xwnd) return;
+        if (v) XMapWindow(_dpy, _xwnd);
+        else   XUnmapWindow(_dpy, _xwnd);
         XFlush(_dpy);
-        return;
     }
-    // Create invisible cursor
-    static ::Cursor invisible{};
-    if (!invisible) {
-        ::Pixmap bm = XCreatePixmap(_dpy, _xwnd, 1, 1, 1);
-        XColor black{}; // zeros
-        static char data[1] = { 0 };
-        ::Pixmap mask = XCreateBitmapFromData(_dpy, _xwnd, data, 1, 1);
-        invisible = XCreatePixmapCursor(_dpy, bm, mask, &black, &black, 0, 0);
-        XFreePixmap(_dpy, bm);
-        XFreePixmap(_dpy, mask);
-    }
-    XDefineCursor(_dpy, _xwnd, invisible);
-    XFlush(_dpy);
-}
 
     inline void native::Window::setFullscreen(bool) const noexcept {
     // _NET_WM_STATE_FULLSCREEN via XSendEvent + atoms.
 }
 #endif
+
+#ifdef IO_IMPLEMENTATION
+#   if defined(_WIN32)
+
+    inline void native::Window::setCursor(Cursor c) const noexcept {
+        if (!_hwnd) return;
+
+        if (c == Cursor::Hidden) {
+            ::SetCursor(nullptr);
+            return;
+        }
+
+        LPCSTR idc = IDC_ARROW;
+        switch (c) {
+        case Cursor::Arrow:     idc = IDC_ARROW;     break;
+        case Cursor::IBeam:     idc = IDC_IBEAM;     break;
+        case Cursor::Crosshair: idc = IDC_CROSS;     break;
+        case Cursor::Hand:      idc = IDC_HAND;      break;
+        case Cursor::HResize:   idc = IDC_SIZEWE;    break;
+        case Cursor::VResize:   idc = IDC_SIZENS;    break;
+        case Cursor::Hidden:    return;
+        }
+
+        ::HCURSOR cur = ::LoadCursorA(nullptr, idc);
+        if (cur) {
+            ::SetClassLongPtrW(_hwnd, GCLP_HCURSOR, reinterpret_cast<LONG_PTR>(cur));
+            ::SetCursor(cur);
+        }
+    }
+
+#   endif
+#endif
+
+#ifdef IO_IMPLEMENTATION
+#   if defined(__linux__)
+
+#       include <X11/cursorfont.h>
+
+    inline void native::Window::setCursor(Cursor c) const noexcept {
+        if (!_dpy || !_xwnd) return;
+
+        if (c == Cursor::Hidden) {
+            static const char empty_data[8] = { 0,0,0,0,0,0,0,0 };
+            ::Pixmap blank_pixmap = ::XCreateBitmapFromData(_dpy, _xwnd, empty_data, 8, 8);
+            if (!blank_pixmap) return;
+
+            ::XColor dummy{};
+            ::Cursor blank_cursor = ::XCreatePixmapCursor(_dpy, blank_pixmap, blank_pixmap, &dummy, &dummy, 0, 0);
+            ::XDefineCursor(_dpy, _xwnd, blank_cursor);
+            ::XFreeCursor(_dpy, blank_cursor);
+            ::XFreePixmap(_dpy, blank_pixmap);
+            ::XFlush(_dpy);
+            return;
+        }
+
+        unsigned shape = XC_left_ptr;
+        switch (c) {
+        case Cursor::Arrow:     shape = XC_left_ptr;         break;
+        case Cursor::IBeam:     shape = XC_xterm;            break;
+        case Cursor::Crosshair: shape = XC_crosshair;        break;
+        case Cursor::Hand:      shape = XC_hand2;            break;
+        case Cursor::HResize:   shape = XC_sb_h_double_arrow; break;
+        case Cursor::VResize:   shape = XC_sb_v_double_arrow; break;
+        case Cursor::Hidden:    return;
+        }
+
+        ::Cursor cursor = ::XCreateFontCursor(_dpy, shape);
+        ::XDefineCursor(_dpy, _xwnd, cursor);
+        ::XFreeCursor(_dpy, cursor);
+        ::XFlush(_dpy);
+    }
+
+#   endif
+#endif
+
     // -------------------- Native Opengl Context -------------------------
     struct Opengl {
         private:
@@ -2323,12 +2424,21 @@ namespace internal {
         IO_NODISCARD inline int height() const noexcept override { return _height; }
         IO_NODISCARD inline float mouseX() const noexcept override { return _mouse_x; }
         IO_NODISCARD inline float mouseY() const noexcept override { return _mouse_y; }
+
+        IO_NODISCARD CursorState getCursorState() const noexcept override {
+            return _is_cursor_edits_text      ? CursorState::TextEdit :
+                   _is_cursor_hresize         ? CursorState::HResizing :
+                   _is_cursor_vresize         ? CursorState::VResizing :
+                   _is_cursor_hovering_button ? CursorState::HoversButton :
+                                                CursorState::Default;
+        }
+
         IO_NODISCARD inline bool isShown() const noexcept override { return _shown; }
         IO_NODISCARD inline bool isFullscreen() const noexcept override { return _fullscreen; }
         IO_NODISCARD inline bool isCursorVisible() const noexcept override { return _cursor; }
         IO_NODISCARD inline bool isMouseDown() const noexcept override { return _mouse_down; }
         IO_NODISCARD inline bool isPrevMouseDown() const noexcept override { return _prev_mouse_down; }
-        IO_NODISCARD inline float elementScale() const noexcept override { return _element_scale; }
+        IO_NODISCARD inline float UiScale() const noexcept override { return _ui_scale; }
         inline void onGeometryChange(int w, int h) noexcept override;
 
         IO_NODISCARD inline bool isMouseReleased() const noexcept { return _mouse_released; }
@@ -2366,8 +2476,17 @@ namespace internal {
         inline void setShow(bool value) noexcept { _shown = value; native().setShow(value); }
         inline void setTitle(io::char_view new_title) const noexcept { native().setTitle(new_title); }
         inline void setFullscreen(bool value) noexcept { _fullscreen = value; native().setFullscreen(value); }
-        inline void setCursorVisible(bool value) noexcept { _cursor = value; native().setCursorVisible(value); }
-        inline void setElementScale(float value) noexcept { _element_scale = value; }
+        inline void setElementScale(float value) noexcept { _ui_scale = value; }
+        inline void setCursor(Cursor c) noexcept override {
+            _cursor = (c != Cursor::Hidden);
+            _native_window.setCursor(c);
+        }
+        inline void resetCursorState() noexcept override {
+            _is_cursor_edits_text = false;
+            _is_cursor_hresize = false;
+            _is_cursor_vresize = false;
+            _is_cursor_hovering_button = false;
+        }
 
         inline io::u16 getAtlasSide(AtlasId id) const noexcept { return (id<0) ? 0 : (id>=(int)_atlases.size()) ? 0 : _atlases[id].atlas_side;   }
 
@@ -2391,9 +2510,13 @@ namespace internal {
 
         // --- window params ---
         bool _cursor = true;
+        bool _is_cursor_hovering_button = false;
+        bool _is_cursor_edits_text = false;
+        bool _is_cursor_hresize = false;
+        bool _is_cursor_vresize = false;
         bool _fullscreen = false;
         bool _shown;
-        float _element_scale{ 1.f };
+        float _ui_scale{ 1.f };
         ContextGuardT<Window> _ctx; // RAII context
 
         // --- text ---
@@ -2476,7 +2599,7 @@ namespace internal {
 
         float ax, ay; internal::dock_anchor_px(d.dock, vw, vh, ax, ay);
 
-        const auto bb = internal::measure_text_bbox_px(A, d, _element_scale);
+        const auto bb = internal::measure_text_bbox_px(A, d, _ui_scale);
 
         float dx, dy; internal::dock_align_shift(d.dock, bb, dx, dy);
 
@@ -2484,7 +2607,7 @@ namespace internal {
         const float origin_y = ay + d.y + dy;
 
         // ---- existing layout (but use origin_*) ----
-        const float scale = d.scale * _element_scale;
+        const float scale = d.scale * _ui_scale;
         const float line_px = (float)A.pixel_height * scale * ((d.line_height <= 0.f) ? 1.f : d.line_height);
         const float space_px = line_px * 0.5f;
         const float tab_px = space_px * ((d.tab_width <= 0.f) ? 4.f : d.tab_width);
@@ -2642,7 +2765,7 @@ namespace internal {
         float ax = 0, ay = 0;
         internal::dock_anchor_px(b.dock, vw, vh, ax, ay);
 
-        const auto bb = internal::measure_text_bbox_px(A, td, _element_scale);
+        const auto bb = internal::measure_text_bbox_px(A, td, _ui_scale);
 
         float dx = 0, dy = 0;
         internal::dock_align_shift(b.dock, bb, dx, dy);
@@ -2667,9 +2790,16 @@ namespace internal {
         out.clicked = out.hovered && mouse_released; // release inside
 
         // 4) style
-        if (out.held)        td.style = b.style.active;
-        else if (out.hovered)td.style = b.style.hover;
-        else                 td.style = b.style.normal;
+        if (out.held) {
+            td.style = b.style.active;
+        }
+        else if (out.hovered) {
+            _is_cursor_hovering_button = true;
+            td.style = b.style.hover;
+        }
+        else {
+            td.style = b.style.normal;
+        }
 
         // 5) draw
         DrawText(td);
