@@ -671,20 +671,24 @@ namespace native {
                 PostMessageW(hwnd, WM_PAINT, 0, 0);
                 return 0; // handled
             } // WM_SIZE
+            case WM_SETCURSOR: {
+                if (!win->isCursorVisible()) {
+                    ::SetCursor(nullptr);
+                    return TRUE;
+                }
+                const CursorState cs = win->getCursorState();
+
+                if (cs != win->native().getLastCursorState()) {
+                    win->native().setCursor(cs);
+                    win->native().updateLastCursorState(cs);
+                }
+                win->resetCursorState();
+                return TRUE;
+            }
             case WM_MOUSEMOVE: {
                 int mouseX = LOWORD(lparam);
                 int mouseY = HIWORD(lparam);
                 ::hi::native::Window::handleMouseMove(win, mouseX, mouseY);
-
-                if (win->isCursorVisible()) {
-                    const CursorState cs = win->getCursorState();
-
-                    if (cs != win->native().getLastCursorState()) {
-                        win->native().setCursor(cs);
-                        win->native().updateLastCursorState(cs);
-                    }
-                    win->resetCursorState();
-                }
                 win->onMouseMove(mouseX, mouseY);
                 return 0;
             }
@@ -2480,6 +2484,10 @@ namespace internal {
         inline void setCursor(Cursor c) noexcept override {
             _cursor = (c != Cursor::Hidden);
             _native_window.setCursor(c);
+        }
+        inline void setCursorVisible(bool value) noexcept {
+            _cursor = value;
+            setCursor(value ? Cursor::Arrow : Cursor::Hidden);
         }
         inline void resetCursorState() noexcept override {
             _is_cursor_edits_text = false;
