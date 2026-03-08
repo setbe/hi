@@ -12,6 +12,7 @@
 #           define NOMINMAX
 #       endif
 #       include <Windows.h>
+// #       include <Psapi.h> // for `SetProcessWorkingSetSize`, `K32EmptyWorkingSet`
 #       ifdef DrawText
 #           undef DrawText
 #       endif
@@ -352,7 +353,7 @@ struct IWindow {
     friend struct native::Window;
 
     // --- Derived Events ---
-    virtual void onRender() noexcept = 0;
+    virtual void onRender(float dt) noexcept = 0;
     virtual void onError(Error, AboutError) noexcept = 0;
     virtual void onScroll(float deltaX, float deltaY) noexcept = 0;
     virtual void onWindowResize(int width, int height) noexcept = 0;
@@ -379,6 +380,7 @@ struct IWindow {
 
     IO_NODISCARD virtual bool isShown() const noexcept = 0;
     IO_NODISCARD virtual bool isFullscreen() const noexcept = 0;
+    IO_NODISCARD virtual bool isVSync() const noexcept = 0;
     IO_NODISCARD virtual bool isCursorVisible() const noexcept = 0;
     IO_NODISCARD virtual bool isMouseDown() const noexcept = 0;
     IO_NODISCARD virtual bool isPrevMouseDown() const noexcept = 0;
@@ -421,6 +423,7 @@ namespace native {
             inline void setTitle(io::char_view title) const noexcept;
             inline void setShow(bool) const noexcept;
             inline void setFullscreen(bool) const noexcept;
+            IO_NODISCARD inline bool setVSyncEnable(bool enabled) const noexcept;
             inline void setCursor(Cursor c = Cursor::Arrow) const noexcept;
             inline void setCursor(CursorState cs) const noexcept {
                 switch (cs)
@@ -570,7 +573,6 @@ namespace native {
                 /*     cy */ mi.rcMonitor.bottom - mi.rcMonitor.top,
                 /* uFlags */ SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
         }
-
 
         // WPARAM -> Key
         static Key FindKeyFromWparam(WPARAM wparam) noexcept {
@@ -740,10 +742,10 @@ namespace native {
             case WM_NCCREATE: {
                 auto cs = reinterpret_cast<CREATESTRUCTW*>(lparam);
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)(cs->lpCreateParams));
-#ifdef _PSAPI_H_ // Clear resources
-                SetProcessWorkingSetSize(GetCurrentProcess(), -1, -1);
-                K32EmptyWorkingSet(GetCurrentProcess());
-#endif
+//#ifdef _PSAPI_H_ // reduce RAM footprint, not memory fragmention
+//                SetProcessWorkingSetSize(GetCurrentProcess(), -1, -1);
+//                K32EmptyWorkingSet(GetCurrentProcess());
+//#endif
                 return DefWindowProcW(hwnd, msg, wparam, lparam);
             } // WM_NCCREATE
             case WM_DESTROY: PostQuitMessage(0); return 0;
@@ -1018,8 +1020,8 @@ namespace glx {
     }
 
     inline void native::Window::setFullscreen(bool) const noexcept {
-    // _NET_WM_STATE_FULLSCREEN via XSendEvent + atoms.
-}
+        // _NET_WM_STATE_FULLSCREEN via XSendEvent + atoms.
+    }
 #endif
 
 #ifdef IO_IMPLEMENTATION
@@ -1123,7 +1125,7 @@ namespace glx {
             Opengl& operator=(Opengl&&) = delete;
 
         public:
-            inline void Render(IWindow&) const noexcept;
+            inline void Render(IWindow&, float dt) const noexcept;
             inline void SwapBuffers(const IWindow&) const noexcept;
             IO_NODISCARD AboutError CreateContext(IWindow&) noexcept;
 
@@ -1157,15 +1159,14 @@ namespace glx {
         }; // struct OpenglContext
 
 #if defined(IO_IMPLEMENTATION) && defined(_WIN32)
-        inline void Opengl::Render(IWindow& win) const noexcept {
+        inline void Opengl::Render(IWindow& win, float dt) const noexcept {
             PAINTSTRUCT ps;
             HWND wnd = win.native().getHwnd();
             HDC dc = win.native().getHdc();
             HGLRC glc = getHglrc();
 
             BeginPaint(wnd, &ps);
-            win.onRender();
-
+            win.onRender(dt);
             EndPaint(wnd, &ps);
         } // Render
         inline void Opengl::SwapBuffers(const IWindow& win) const noexcept {
@@ -1273,17 +1274,6 @@ namespace glx {
                 HDC hdc, const int* piAttribIList, const FLOAT* pfAttribFList,
                 UINT nMaxFormats, int* piFormats, UINT* nNumFormats);
             typedef BOOL(WINAPI* PFNWGLSWAPINTERVALEXTPROC)(int interval);
-
-            // For future
-            // Enable VSync
-            /*typedef BOOL(APIENTRY* PFNWGLSWAPINTERVALEXTPROC)(int interval);
-            PFNWGLSWAPINTERVALEXTPROC wglSwapIntervalEXT =
-                (PFNWGLSWAPINTERVALEXTPROC)(void*)wglGetProcAddress(
-                    "wglSwapIntervalEXT");
-            if (!wglSwapIntervalEXT)
-                return AboutError::Win32_Missing_SwapIntervalEXT;
-
-            wglSwapIntervalEXT(1);*/
 
             IO_CONSTEXPR_VAR int PIXEL_ATTRS[]{
                 arb.DRAW_TO_WINDOW, GL_TRUE,
@@ -1396,6 +1386,7 @@ namespace glx {
                 if (!miss.empty()) return AboutError::MissingRequiredOpenglFunction;
                 gl::loaded = true;
 
+                win.native().setVSyncEnable(true);
                 return AboutError::None;
             } // CreateModernContext
         } // namespace wgl
@@ -1432,6 +1423,22 @@ namespace glx {
 
     static inline PFN_glXCreateContextAttribsARB get_create_attribs() noexcept {
         return (PFN_glXCreateContextAttribsARB)glXGetProcAddressARB((const GLubyte*)"glXCreateContextAttribsARB");
+    }
+
+    typedef void (*PFN_glXSwapIntervalEXTPROC)(Display*, GLXDrawable, int);
+    typedef int  (*PFN_glXSwapIntervalMESAPROC)(unsigned int);
+    typedef int  (*PFN_glXSwapIntervalSGIPROC)(int);
+
+    static inline PFN_glXSwapIntervalEXTPROC get_swap_interval_ext() noexcept {
+        return (PFN_glXSwapIntervalEXTPROC)glXGetProcAddressARB((const GLubyte*)"glXSwapIntervalEXT");
+    }
+
+    static inline PFN_glXSwapIntervalMESAPROC get_swap_interval_mesa() noexcept {
+        return (PFN_glXSwapIntervalMESAPROC)glXGetProcAddressARB((const GLubyte*)"glXSwapIntervalMESA");
+    }
+
+    static inline PFN_glXSwapIntervalSGIPROC get_swap_interval_sgi() noexcept {
+        return (PFN_glXSwapIntervalSGIPROC)glXGetProcAddressARB((const GLubyte*)"glXSwapIntervalSGI");
     }
 } // namespace glx
 
@@ -1493,6 +1500,7 @@ namespace glx {
             }
             gl::loaded = true;
             _ctx = ctx;
+            _win->native().setVSyncEnable(true);
             return AboutError::None;
         }
 
@@ -1503,7 +1511,7 @@ namespace glx {
         glXDestroyContext(_win->native().dpy(), _ctx);
     }
 
-    inline void native::Opengl::Render(IWindow& win) const noexcept {
+    inline void native::Opengl::Render(IWindow& win, float dt) const noexcept {
         auto* dpy = win.native().dpy();
         if (!dpy || !_ctx) return;
 
@@ -1511,7 +1519,7 @@ namespace glx {
         if (glXGetCurrentContext() != _ctx) {
             glXMakeCurrent(dpy, win.native().xwnd(), _ctx);
         }
-        win.onRender();
+        win.onRender(dt);
     }
 
     inline void native::Opengl::SwapBuffers(const IWindow& win) const noexcept {
@@ -1520,6 +1528,52 @@ namespace glx {
         glXSwapBuffers(dpy, win.native().xwnd());
     }
 #endif
+
+
+#if defined(IO_IMPLEMENTATION) && defined(_WIN32)
+    IO_NODISCARD inline bool Window::setVSyncEnable(bool enabled) const noexcept {
+        if (!_hwnd || !_hdc) return false;
+
+        typedef BOOL(WINAPI* PFNWGLSWAPINTERVALEXTPROC)(int interval);
+        typedef int  (WINAPI* PFNWGLGETSWAPINTERVALEXTPROC)(void);
+
+        auto set_proc = (PFNWGLSWAPINTERVALEXTPROC)wglGetProcAddress("wglSwapIntervalEXT");
+        if (!set_proc) return false;
+
+        if (!set_proc(enabled ? 1 : 0)) return false;
+
+        auto get_proc = (PFNWGLGETSWAPINTERVALEXTPROC)wglGetProcAddress("wglGetSwapIntervalEXT");
+        if (get_proc) {
+            const int cur = get_proc();
+            return cur == (enabled ? 1 : 0);
+        }
+
+        return true;
+    }
+#endif
+
+#if defined(IO_IMPLEMENTATION) && defined(__linux__)
+    IO_NODISCARD inline bool Window::setVSyncEnable(bool enabled) const noexcept {
+        if (!_dpy || !_xwnd) return false;
+
+        if (auto ext = glx::get_swap_interval_ext()) {
+            ext(_dpy, _xwnd, enabled ? 1 : 0);
+            return true;
+        }
+
+        if (auto mesa = glx::get_swap_interval_mesa()) {
+            mesa(enabled ? 1u : 0u);
+            return true;
+        }
+
+        if (auto sgi = glx::get_swap_interval_sgi()) {
+            sgi(enabled ? 1 : 0);
+            return true;
+        }
+        return false;
+    }
+#endif
+
 } // namespace native
 
     template<class Win>
@@ -2408,8 +2462,12 @@ namespace internal {
 
         Derived* self() noexcept { return static_cast<Derived*>(this); }
 
+        IO_NODISCARD inline bool PollEvents() noexcept;
+        inline void Render() noexcept override;
+        inline void SwapBuffers() const noexcept;
+
         // --- Implement interface using CRTP dispatch ---
-        inline void onRender() noexcept override { }
+        inline void onRender(float dt) noexcept override { }
         inline void onError(Error e, AboutError ae)       noexcept override { }
         inline void onScroll(float deltaX, float deltaY)  noexcept override { }
         inline void onWindowResize(int width, int height) noexcept override { }
@@ -2418,7 +2476,10 @@ namespace internal {
         inline void onKeyUp(Key k)             noexcept override { }
         inline void onFocusChange(bool gained) noexcept override { }
 
-        // Getters
+        // Implemented by this class
+        inline void onGeometryChange(int w, int h) noexcept override;
+
+        // --- Getters ---
         IO_NODISCARD inline RendererApi api() const noexcept override { return _ctx.api; }
         IO_NODISCARD inline       native::Opengl& opengl()       noexcept override { return g; }
         IO_NODISCARD inline const native::Opengl& opengl() const noexcept override { return g; }
@@ -2428,7 +2489,6 @@ namespace internal {
         IO_NODISCARD inline int height() const noexcept override { return _height; }
         IO_NODISCARD inline float mouseX() const noexcept override { return _mouse_x; }
         IO_NODISCARD inline float mouseY() const noexcept override { return _mouse_y; }
-
         IO_NODISCARD CursorState getCursorState() const noexcept override {
             return _is_cursor_edits_text      ? CursorState::TextEdit :
                    _is_cursor_hresize         ? CursorState::HResizing :
@@ -2436,50 +2496,27 @@ namespace internal {
                    _is_cursor_hovering_button ? CursorState::HoversButton :
                                                 CursorState::Default;
         }
-
         IO_NODISCARD inline bool isShown() const noexcept override { return _shown; }
         IO_NODISCARD inline bool isFullscreen() const noexcept override { return _fullscreen; }
+        IO_NODISCARD inline bool isVSync() const noexcept override { return _is_vsync; }
         IO_NODISCARD inline bool isCursorVisible() const noexcept override { return _cursor; }
         IO_NODISCARD inline bool isMouseDown() const noexcept override { return _mouse_down; }
         IO_NODISCARD inline bool isPrevMouseDown() const noexcept override { return _prev_mouse_down; }
         IO_NODISCARD inline float UiScale() const noexcept override { return _ui_scale; }
-        inline void onGeometryChange(int w, int h) noexcept override;
-
         IO_NODISCARD inline bool isMouseReleased() const noexcept { return _mouse_released; }
 
+        IO_NODISCARD inline io::u32 targetFps() const noexcept { return _target_fps; }
+        IO_NODISCARD inline io::u32 targetFrameUs() const noexcept { return _target_frame_us; }
+
     public:
-        IO_NODISCARD inline bool PollEvents() noexcept {
-            const bool prev = _mouse_down;
-
-            // const Window<Derived>* -> IWindow&
-            auto* self_nc = const_cast<Window<Derived>*>(this);
-            const bool running = native().PollEvents(static_cast<IWindow&>(*self_nc));
-
-            _mouse_released = (prev && !_mouse_down);
-            _prev_mouse_down = prev;
-            return running;
-        }
-        inline void Render() noexcept override;
-        inline void SwapBuffers() const noexcept;
-
-        // Font files: stores path, checks file exists
-        FontId LoadFont(io::char_view ttf_path) noexcept;
-        // Plan/Build atlas (load TTF bytes, plan, build, upload texture)
-        AtlasId GenerateFontAtlas(FontId font_id, const FontAtlasDesc& desc) noexcept;
-        template<typename... Scripts>
-        AtlasId GenerateFontAtlas(FontId font_id, const FontAtlasDesc& desc, Scripts... scripts) noexcept;
-        
-        ButtonState Button(const ButtonDraw& b) noexcept;
-        
-        // Immediate text
-        void DrawText(const TextDraw& d) noexcept;
-        // Call once per frame inside Render() (or end of Render())
-        void FlushText() noexcept;
-
         // --- Setters ---
         inline void setShow(bool value) noexcept { _shown = value; native().setShow(value); }
         inline void setTitle(io::char_view new_title) const noexcept { native().setTitle(new_title); }
         inline void setFullscreen(bool value) noexcept { _fullscreen = value; native().setFullscreen(value); }
+        inline void setVSyncEnable(bool enabled) noexcept {
+            _is_vsync = enabled;
+            _pending_vsync_apply = true;
+        }
         inline void setElementScale(float value) noexcept { _ui_scale = value; }
         inline void setCursor(Cursor c) noexcept override {
             _cursor = (c != Cursor::Hidden);
@@ -2496,7 +2533,26 @@ namespace internal {
             _is_cursor_hovering_button = false;
         }
 
-        inline io::u16 getAtlasSide(AtlasId id) const noexcept { return (id<0) ? 0 : (id>=(int)_atlases.size()) ? 0 : _atlases[id].atlas_side;   }
+        inline void setTargetFps(io::u32 fps) noexcept {
+            _target_fps = fps;
+            _target_frame_us = (fps == 0) ? 0u : (1000000u / fps);
+        }
+
+        // --- Font files ---  (stores path, checks file exists)
+        FontId LoadFont(io::char_view ttf_path) noexcept;
+        
+        // --- Plan/Build atlas --- (load TTF bytes, plan, build, upload texture)
+        AtlasId GenerateFontAtlas(FontId font_id, const FontAtlasDesc& desc) noexcept;
+        template<typename... Scripts>
+        AtlasId GenerateFontAtlas(FontId font_id, const FontAtlasDesc& desc, Scripts... scripts) noexcept;
+
+        inline io::u16 getAtlasSideSize(AtlasId id) const noexcept { return (id < 0) ? 0 : (id >= (int)_atlases.size()) ? 0 : _atlases[id].atlas_side; }
+
+        // --- GUI --- 
+
+        ButtonState Button(const ButtonDraw& b) noexcept;
+        void DrawText(const TextDraw& d) noexcept;
+        void FlushText() noexcept; // Call once per frame inside Render() (or end of Render())
 
     protected:
         inline void setMouseX(float v) noexcept override { _mouse_x = v; }
@@ -2508,6 +2564,9 @@ namespace internal {
         native::Window _native_window;
         int _width;
         int _height;
+        io::u64 _prev_render_us = 0;
+        io::u32 _target_fps = 144;
+        io::u32 _target_frame_us = 1000000u / 144u;
 
         // --- mouse ---
         float _mouse_x = 0.f;
@@ -2517,11 +2576,13 @@ namespace internal {
         bool  _mouse_released = true;
 
         // --- window params ---
-        bool _cursor = true;
+        bool _cursor = true; // is visible
         bool _is_cursor_hovering_button = false;
         bool _is_cursor_edits_text = false;
         bool _is_cursor_hresize = false;
         bool _is_cursor_vresize = false;
+        bool _is_vsync = true;             // desired
+        bool _pending_vsync_apply = false; // actual last-known applied
         bool _fullscreen = false;
         bool _shown;
         float _ui_scale{ 1.f };
@@ -2555,18 +2616,78 @@ namespace internal {
         } // switch renderer
 
         onWindowResize(w, h); // Call user defined callback
-        onRender(); // Rerender the window
+        onRender(0.f); // Rerender the window without frame delta
         SwapBuffers();
     } // onGeometryChange
 
     template <typename Derived>
+    IO_NODISCARD inline bool Window<Derived>::PollEvents() noexcept {
+        const bool prev = _mouse_down;
+
+        // const Window<Derived>* -> IWindow&
+        auto* self_nc = const_cast<Window<Derived>*>(this);
+        const bool running = native().PollEvents(static_cast<IWindow&>(*self_nc));
+
+        _mouse_released = (prev && !_mouse_down);
+        _prev_mouse_down = prev;
+        return running;
+    }
+
+    template <typename Derived>
     inline void Window<Derived>::Render() noexcept {
         if (!_ctx.alive) return;
+
+        const io::u64 frame_begin_us = io::monotonic_us();
+        float dt = 0.f;
+
+        if (_prev_render_us != 0) {
+            io::u64 delta_us64 = frame_begin_us - _prev_render_us;
+            if (delta_us64 > 100000ull) delta_us64 = 100000ull;
+            dt = (float)(io::u32)delta_us64 * 0.000001f;
+        }
+
+        _prev_render_us = frame_begin_us;
+
         switch (api()) {
-        case RendererApi::Opengl: g.Render(*this); break;
-        default: break;
-        } // switch
-    } // render
+        case RendererApi::Opengl:
+            if (_pending_vsync_apply) {
+                if (native().setVSyncEnable(_is_vsync)) {
+                    _pending_vsync_apply = false;
+                }
+            }
+            g.Render(*this, dt);
+            break;
+        default:
+            break;
+        }
+
+        SwapBuffers();
+
+        if (_target_frame_us != 0) {
+            const io::u64 target_end_us = frame_begin_us + (io::u64)_target_frame_us;
+            io::u64 now_us = io::monotonic_us();
+
+            if (now_us < target_end_us) {
+                io::u64 remaining_us = target_end_us - now_us;
+
+                // coarse sleep first
+                if (remaining_us > 2000ull) {
+                    const io::u32 remaining_ms = (io::u32)io::div_u64_u32(remaining_us, 1000u);
+                    if (remaining_ms > 1u) {
+                        io::sleep_ms(remaining_ms - 1u);
+                    }
+                }
+
+                // fine wait
+                io::Backoff backoff{};
+                do {
+                    now_us = io::monotonic_us();
+                    if (now_us >= target_end_us) break;
+                    backoff.relax();
+                } while (true);
+            }
+        }
+    } // Render
 
     template <typename Derived>
     inline void Window<Derived>::SwapBuffers() const noexcept {

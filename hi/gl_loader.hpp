@@ -491,10 +491,11 @@ namespace gl {
     GL_CALL_CUSTOM(GetIntegerv, void, (io::u32, int*), (io::u32 pname, int* data), (pname, data))
     GL_CALL_CUSTOM(CullFace,    void, (io::u32),       (Face face),                (static_cast<io::u32>(face)))
     
-    // GL_CALL_CUSTOM(PolygonMode, void,          // NOT SUPPORTED by OpenGL Core
-    //     /* proc   T */ (io::u32, io::u32),
-    //     /*     decl */ (Face face, Polygon mode),
-    //     /*     pass */ (static_cast<io::u32>(face), static_cast<io::u32>(mode)))
+    // NOT SUPPORTED by OpenGL ES
+    GL_CALL_CUSTOM(PolygonMode, void,
+        /* proc   T */ (io::u32, io::u32),
+        /*     decl */ (Face face, Polygon mode),
+        /*     pass */ (static_cast<io::u32>(face), static_cast<io::u32>(mode)))
 
     GL_CALL_CUSTOM(TexParameterf, void,
         /* proc   T */ (io::u32, io::u32, float),
@@ -693,6 +694,7 @@ namespace gl {
         IO_GL_LOAD(Disable);
         IO_GL_LOAD(BlendFunc);
         IO_GL_LOAD(CullFace);
+        IO_GL_LOAD(PolygonMode);
 
         IO_GL_LOAD(GenBuffers);
         IO_GL_LOAD(BindBuffer);

@@ -8,8 +8,20 @@
 #   define IO_TERMINAL
 #endif
 
-#ifdef None // Macro may come from XLib
+#ifdef None // Macro may come from XLib, we use `None` none of this in codebase
 #   undef None
+#endif
+
+#if defined(_M_IX86) || defined(__i386__)
+#   define IO_ARCH_X86_32 1
+#endif
+
+#if defined(_M_X64) || defined(__x86_64__)
+#   define IO_ARCH_X86_64 1
+#endif
+
+#if IO_ARCH_X86_32 || IO_ARCH_X86_64
+#   define IO_ARCH_X86 1
 #endif
 
 // ------------------------------ IO_API --------------------------------------
@@ -88,7 +100,7 @@ extern "C" {
         for (;;) {}
     }
 
-#   if defined(_MSC_VER) && defined(_M_IX86)
+#   if defined(_MSC_VER) && defined(IO_ARCH_X86_32)
         __declspec(naked) unsigned __int64 IO_CDECL _aullshr(void) {
             __asm {
                 // in:  EDX:EAX = value, CL = shift
@@ -347,7 +359,7 @@ namespace io {
         unsigned __int128 p = (unsigned __int128)a * (unsigned __int128)b;
         return { (u64)p, (u64)(p >> 64) };
 
-#elif defined(_MSC_VER) && defined(_M_X64)
+#elif (defined(_MSC_VER) && defined(IO_ARCH_X86_64))
         u128 r;
         r.lo = _umul128(a, b, &r.hi);
         return r;
@@ -384,17 +396,16 @@ namespace io {
 #endif
     }
 
-
-
     // minimal long division, but compact and readable
-    // NOTE: only used once at `io::monotonic_ms()` startup
-    static inline u32 div_u64_u32(u64 n, u32 d) noexcept {
+    static inline u32 div_u64_u32(u64 n, u32 d, u32* rem=nullptr) noexcept {
+        if (d == 0) { if (rem) *rem=0; return 0; }
         u64 q = 0;
-        u64 r = 0;
+        u32 r = 0;
         for (int i=63; i>=0; --i) {
-            r = (r<<1) | ((n>>i) & 1ull);
+            r = (u32)((r<<1) | (u32)((n>>i) & 1ull));
             if (r>=d) { r-=d; q |= (1ull<<i); }
         }
+        if (rem) *rem=r;
         return (u32)q;
     }
 
@@ -408,16 +419,91 @@ namespace io {
         return (u8)iy;
     }
 
+#if !defined(IO_HAS_STD) && IO_ARCH_X86_32
+    static inline u32 io_digit_to_u32_from_double_pos(double x) noexcept {
+        // Preconditions: 0 <= x < 10
+        u32 converted = 0;
+
+#   if defined(_MSC_VER)
+        unsigned short cw_old = 0;
+        unsigned short cw_new = 0;
+        __asm {
+            fnstcw cw_old
+            mov ax, cw_old
+            or ax, 0x0C00         // round toward zero
+            mov cw_new, ax
+            fldcw cw_new
+
+            fld qword ptr[x]
+            fistp dword ptr[converted]
+
+            fldcw cw_old
+        }
+#   elif defined(__GNUC__) || defined(__clang__)
+        unsigned short cw_old = 0;
+        unsigned short cw_new = 0;
+        __asm__ __volatile__(
+            "fnstcw %0\n\t"
+            : "=m"(cw_old)
+        );
+        cw_new = (unsigned short)(cw_old | 0x0C00u);
+        __asm__ __volatile__(
+            "fldcw %0\n\t"
+            "fldl  %1\n\t"
+            "fistpl %2\n\t"
+            "fldcw %3\n\t"
+            :
+        : "m"(cw_new), "m"(x), "m"(converted), "m"(cw_old)
+            : "memory"
+            );
+#   else
+#       error "Not implemented"
+#   endif
+
+        return converted;
+    }
+
+    static inline double io_digit_to_double(u32 d) noexcept {
+        switch (d) {
+        case 0: return 0.0;
+        case 1: return 1.0;
+        case 2: return 2.0;
+        case 3: return 3.0;
+        case 4: return 4.0;
+        case 5: return 5.0;
+        case 6: return 6.0;
+        case 7: return 7.0;
+        case 8: return 8.0;
+        default:return 9.0;
+        }
+    }
+
+    static inline bool io_double_is_nan(double x) noexcept {
+        union { double d; u64 u; } v{ x };
+        const u64 exp = (v.u >> 52) & 0x7FFull;
+        const u64 frac = v.u & 0x000FFFFFFFFFFFFFull;
+        return exp == 0x7FFull && frac != 0;
+    }
+
+    static inline bool io_double_is_inf(double x) noexcept {
+        union { double d; u64 u; } v{ x };
+        const u64 exp = (v.u >> 52) & 0x7FFull;
+        const u64 frac = v.u & 0x000FFFFFFFFFFFFFull;
+        return exp == 0x7FFull && frac == 0;
+    }
+
+#endif // !defined(IO_HAS_STD) && IO_ARCH_X86_32
+
+
     static inline void cpu_pause() noexcept {
-#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
-        _mm_pause();
-#elif (defined(__i386__) || defined(__x86_64__))
-        __asm__ __volatile__("pause");
+#if defined(_MSC_VER) && defined(IO_ARCH_X86)
+        _mm_pause(); // MSVC x86
+#elif defined(IO_ARCH_X86)
+        __asm__ __volatile__("pause"); // x86
 #elif defined(_WIN32) || defined(_WIN64)
-        ::YieldProcessor();
+        ::YieldProcessor(); // Windows ARM
 #else
-        // ARM: yield
-        __asm__ __volatile__("yield");
+        __asm__ __volatile__("yield"); // ARM
 #endif
     }
 
@@ -1242,7 +1328,8 @@ namespace io {
 
     // --- Sleep / Time ---
     void sleep_ms(unsigned ms) noexcept;
-    u64 monotonic_ms() noexcept;
+    IO_NODISCARD inline u64 monotonic_ms() noexcept;
+    IO_NODISCARD inline u64 monotonic_us() noexcept;
 
     // --- Crypto hygiene ---
     void secure_zero(void* p, usize size) noexcept;
@@ -1259,7 +1346,7 @@ namespace native {
         long tv_nsec;
     };
     // ---- syscall numbers ----
-#if defined(__x86_64__)
+#if defined(IO_ARCH_X86_64)
     static IO_CONSTEXPR_VAR long k_sys_read        = 0;
     static IO_CONSTEXPR_VAR long k_sys_write       = 1;
     static IO_CONSTEXPR_VAR long k_sys_openat      = 257;
@@ -1277,7 +1364,7 @@ namespace native {
     static IO_CONSTEXPR_VAR long k_sys_exit          = 60;
     static IO_CONSTEXPR_VAR long k_sys_nanosleep     = 35;
     static IO_CONSTEXPR_VAR long k_sys_clock_gettime = 228;
-#elif defined(__i386__)
+#elif defined(IO_ARCH_X86_32)
     static IO_CONSTEXPR_VAR long k_sys_read        = 3;
     static IO_CONSTEXPR_VAR long k_sys_write       = 4;
     static IO_CONSTEXPR_VAR long k_sys_openat      = 295;
@@ -1331,7 +1418,7 @@ namespace native {
     static IO_CONSTEXPR_VAR long k_econnreset = 104;
 
     // ---- raw syscalls (return: >=0 or -errno) ----
-#if defined(__x86_64__)
+#if defined(IO_ARCH_X86_64)
     static inline long sys0(long n) noexcept {
         long r; asm volatile("syscall" : "=a"(r) : "a"(n) : "rcx","r11","memory"); return r;
     }
@@ -1361,7 +1448,7 @@ namespace native {
             : "rcx","r11","memory");
         return r;
     }
-#elif defined(__i386__)
+#elif defined(IO_ARCH_X86_32)
     static inline long sys0(long n) noexcept {
         long r; asm volatile("int $0x80" : "=a"(r) : "0"(n) : "memory"); return r;
     }
@@ -1396,7 +1483,7 @@ namespace native {
 // ------------------------- raw linux syscalls (no libc) -------------------------
     // Returns: >=0 bytes written, or negative -errno.
     static inline long linux_sys_write(int fd, const void* buf, unsigned long n) noexcept {
-#if defined(__x86_64__)
+#if defined(IO_ARCH_X86_64)
         long ret;
         asm volatile( // k_sys_write = 1 on x86_64
             "syscall"
@@ -1405,7 +1492,7 @@ namespace native {
             : "rcx", "r11", "memory"
         );
         return ret;
-#elif defined(__i386__)
+#elif defined(IO_ARCH_X86_32)
         long ret;
         asm volatile( // k_sys_write = 4 on i386, int 0x80 ABI
             "int $0x80"
@@ -1420,7 +1507,7 @@ namespace native {
     }
 
     static inline long linux_sys_read(int fd, void* buf, unsigned long n) noexcept {
-#if defined(__x86_64__)
+#if defined(IO_ARCH_X86_64)
         long ret;
         asm volatile( // k_sys_read = 0 on x86_64
             "syscall"
@@ -1429,7 +1516,7 @@ namespace native {
             : "rcx", "r11", "memory"
         );
         return ret;
-#elif defined(__i386__)
+#elif defined(IO_ARCH_X86_32)
         long ret;
         asm volatile( // k_sys_read = 3 on i386
             "int $0x80"
@@ -2584,8 +2671,9 @@ namespace native {
             char tmp[32]{};
             int i = 0;
             do {
-                tmp[i++] = char('0' + (v % 10u));
-                v /= 10u;
+                u32 rem = 0;
+                v = div_u64_u32(v, 10u, &rem);
+                tmp[i++] = (char)('0' + rem);
             } while (v);
 
             while (--i >= 0) put(tmp[i]);
@@ -2609,20 +2697,152 @@ namespace native {
         }
 
         inline void write_float(double x, int precision = 6) const noexcept {
-#if !defined(IO_TERMINAL)
-            (void)x; (void)precision;
-#elif !defined(IO_HAS_STD) && defined(_M_IX86)
-            (void)x; (void)precision;
-            write_str("[cannot print float on x86]");
-#else
+#if !defined(IO_HAS_STD) && IO_ARCH_X86_32
+            if (precision < 0) precision = 0;
+            if (precision > 9) precision = 9;
+        
+            if (io_double_is_nan(x)) {
+                write_str("nan");
+                return;
+            }
+            if (io_double_is_inf(x)) {
+                if (x < 0) put('-');
+                write_str("inf");
+                return;
+            }
+        
+            if (x < 0.0) {
+                put('-');
+                x = -x;
+            }
+        
+            if (x == 0.0) {
+                put('0');
+                if (precision > 0) {
+                    put('.');
+                    for (int i = 0; i < precision; ++i) put('0');
+                }
+                return;
+            }
+        
+            // Use scientific notation for very large / very small numbers.
+            // This avoids huge fixed strings and keeps implementation simple.
+            if (x >= 1000000000.0 || x < 0.000001) {
+                int exp10 = 0;
+        
+                // normalize x into [1, 10)
+                static const double p10_pos[] = {
+                    1e256, 1e128, 1e64, 1e32, 1e16, 1e8, 1e4, 1e2, 1e1
+                };
+                static const int p10_pos_e[] = {
+                    256, 128, 64, 32, 16, 8, 4, 2, 1
+                };
+        
+                static const double p10_neg[] = {
+                    1e-256, 1e-128, 1e-64, 1e-32, 1e-16, 1e-8, 1e-4, 1e-2, 1e-1
+                };
+                static const int p10_neg_e[] = {
+                    256, 128, 64, 32, 16, 8, 4, 2, 1
+                };
+        
+                if (x >= 10.0) {
+                    for (int i = 0; i < (int)(sizeof(p10_pos) / sizeof(p10_pos[0])); ++i) {
+                        while (x >= p10_pos[i]) {
+                            x /= p10_pos[i];
+                            exp10 += p10_pos_e[i];
+                        }
+                    }
+                } else if (x < 1.0) {
+                    for (int i = 0; i < (int)(sizeof(p10_neg) / sizeof(p10_neg[0])); ++i) {
+                        while (x < p10_neg[i]) {
+                            x /= p10_neg[i];
+                            exp10 -= p10_neg_e[i];
+                        }
+                    }
+                    while (x < 1.0) {
+                        x *= 10.0;
+                        --exp10;
+                    }
+                }
+        
+                // one digit before dot
+                io::u32 d = io_digit_to_u32_from_double_pos(x);
+                if (d > 9) d = 9;
+                put((char)('0' + d));
+                x -= io_digit_to_double(d);
+        
+                if (precision > 0) {
+                    put('.');
+                    for (int i = 0; i < precision; ++i) {
+                        x *= 10.0;
+                        io::u32 fd = io_digit_to_u32_from_double_pos(x);
+                        if (fd > 9) fd = 9;
+                        put((char)('0' + fd));
+                        x -= io_digit_to_double(fd);
+                        if (x < 0.0) x = 0.0;
+                    }
+                }
+        
+                put('e');
+                if (exp10 >= 0) put('+');
+                else {
+                    put('-');
+                    exp10 = -exp10;
+                }
+                write_unsigned((io::u32)exp10);
+                return;
+            }
+        
+            // Fixed notation for ordinary values: 0.000001 <= x < 1e9
+            {
+                static const double p10[] = {
+                    1e8, 1e7, 1e6, 1e5, 1e4, 1e3, 1e2, 1e1, 1e0
+                };
+        
+                bool started = false;
+        
+                // integer part
+                for (int i = 0; i < (int)(sizeof(p10) / sizeof(p10[0])); ++i) {
+                    const double base = p10[i];
+                    io::u32 digit = 0;
+        
+                    if (x >= base) {
+                        digit = io_digit_to_u32_from_double_pos(x / base);
+                        if (digit > 9) digit = 9;
+                        started = true;
+                    }
+        
+                    if (started) {
+                        put((char)('0' + digit));
+                        x -= io_digit_to_double(digit) * base;
+                        if (x < 0.0) x = 0.0;
+                    }
+                }
+        
+                if (!started) put('0');
+        
+                if (precision > 0) {
+                    put('.');
+                    for (int i = 0; i < precision; ++i) {
+                        x *= 10.0;
+                        io::u32 digit = io_digit_to_u32_from_double_pos(x);
+                        if (digit > 9) digit = 9;
+                        put((char)('0' + digit));
+                        x -= io_digit_to_double(digit);
+                        if (x < 0.0) x = 0.0;
+                    }
+                }
+            }
+        
+#else // not "32 bit no-std"
             if (x < 0) { put('-'); x = -x; }
-
+        
             u64 ip = (u64)x;
             double fp = x - (double)ip;
-
+        
             write_unsigned(ip);
             put('.');
-
+        
             fp *= (double)pow10(precision);
             write_unsigned((u64)(fp + 0.5));
 #endif
@@ -2653,10 +2873,7 @@ namespace native {
         inline const Self& operator<<(const string& v) const noexcept { return *this << v.as_view(); }
 
         inline const Self& operator<<(const wstring& w) const noexcept {
-#ifndef IO_TERMINAL
-            (void)w;
-            return *this;
-#elif defined(_WIN32)
+#if defined(_WIN32)
             if (!sink || w.size() == 0) return *this;
             TerminalSink* ts = reinterpret_cast<TerminalSink*>(sink);
             if (ts) {
@@ -3122,7 +3339,7 @@ struct file_handle {
     // ---- minimal kernel stat layout for size/type via newfstatat ----
     // We only need st_mode + st_size. Layout differs per arch; use statx for perfection,
     // but this minimal works for common kernels/ABIs. If you hit issues, we’ll switch to statx.
-#if defined(__x86_64__)
+#if defined(IO_ARCH_X86_64)
     struct kstat {
         u64 st_dev; u64 st_ino; u64 st_nlink;
         u32 st_mode; u32 st_uid; u32 st_gid; u32 __pad0;
@@ -3135,13 +3352,13 @@ struct file_handle {
         u64 st_ctime; u64 st_ctime_nsec;
         i64 __unused[3];
     };
-#elif defined(__i386__)
+#elif defined(IO_ARCH_X86_32)
     // i386 is trickier; simplest: don’t support size_file/tell via stat here
     struct kstat { u32 _dummy; };
 #endif
 
     static inline bool fstatat_basic(int dirfd, const char* cpath, int flags, u32& out_mode, u64& out_size) noexcept {
-#if defined(__i386__)
+#if defined(IO_ARCH_X86_32)
 #error "fstatat_basic(i386): Not implemented"
         (void)dirfd; (void)cpath; (void)flags; (void)out_mode; (void)out_size;
         return false;
@@ -3160,7 +3377,7 @@ struct file_handle {
 
     IO_NODISCARD inline u64 size_file(file_handle* h) noexcept {
         if (!h || h->fd < 0) return 0;
-#if defined(__i386__)
+#if defined(IO_ARCH_X86_32)
 #error "size_file(i386): Not implemented"
         h->err = true;
         return 0;
@@ -3452,7 +3669,7 @@ namespace native {
         if (p.empty()) return false;
 
         u32 mode = 0; u64 sz = 0;
-#if defined(__i386__)
+#if defined(IO_ARCH_X86_32)
 #error "stat(i386): Not implemented"
         out_type = file_type::unknown;
         return false;
@@ -3567,7 +3784,7 @@ namespace native {
         out_type = file_type::unknown;
         out_size = 0;
 
-#if defined(__i386__)
+#if defined(IO_ARCH_X86_32)
 #error "fstatat_name(i386): Not implemented"
         (void)h; (void)name_cstr;
         return false;
@@ -3965,7 +4182,7 @@ namespace io {
         // Store size in front of user pointer so free() doesn't need size.
         const usize total = bytes + sizeof(usize);
 
-    #if defined(__x86_64__)
+    #if defined(IO_ARCH_X86_64)
         long r = sys6(k_sys_mmap,
             /*addr*/ 0,
             (long)total,
@@ -3977,7 +4194,7 @@ namespace io {
         if (is_err(r)) return nullptr;
         void* base = (void*)(uintptr_t)r;
 
-    #elif defined(__i386__)
+    #elif defined(IO_ARCH_X86_32)
         // mmap2 expects offset in 4096-byte pages; offset=0 ok.
         long r = sys6(k_sys_mmap2,
             /*addr*/ 0,
@@ -4007,7 +4224,7 @@ namespace io {
 
         long r;
         do {
-        #if defined(__x86_64__)
+        #if defined(IO_ARCH_X86_64)
             r = sys2(k_sys_munmap, (long)(uintptr_t)base, (long)total);
         #else
             r = sys2(k_sys_munmap, (long)(uintptr_t)base, (long)total);
@@ -4025,7 +4242,7 @@ namespace io {
         ::ExitProcess(static_cast<UINT>(error_code));
 #elif defined(__linux__)
     using namespace native;
-    #if defined(__x86_64__)
+    #if defined(IO_ARCH_X86_64)
         (void)sys1(k_sys_exit, (long)error_code);
     #else
         (void)sys1(k_sys_exit, (long)error_code);
@@ -4052,7 +4269,7 @@ namespace io {
 #endif
     }
 
-    u64 monotonic_ms() noexcept {
+    IO_NODISCARD inline u64 monotonic_ms() noexcept {
 #if defined(_WIN32)
         static volatile u32 qpc_freq = 0;
         static volatile u32 ms_per_tick_q16 = 0; // (1000<<16)/freq
@@ -4096,6 +4313,60 @@ namespace io {
 
         if (is_err(r)) return 0;
         return (u64)ts.tv_sec * 1000ull + (u64)ts.tv_nsec / 1000000ull;
+#endif
+    }
+    IO_NODISCARD inline u64 monotonic_us() noexcept {
+#if defined(_WIN32)
+        static volatile u32 qpc_freq = 0;
+        static volatile u32 us_per_tick_q16 = 0; // (1000000<<16)/freq
+
+        u32 fr = qpc_freq;
+        u32 k = us_per_tick_q16;
+
+        if (fr == 0) {
+            LARGE_INTEGER li{};
+            ::QueryPerformanceFrequency(&li);
+
+            fr = (u32)li.QuadPart; // QPC frequency practically fits in 32 bits
+            if (fr == 0) return 0;
+
+            // k = (1000000 << 16) / freq
+            k = io::div_u64_u32(1000000ull << 16, fr);
+
+            qpc_freq = fr;
+            us_per_tick_q16 = k;
+        }
+
+        LARGE_INTEGER c{};
+        ::QueryPerformanceCounter(&c);
+
+        const u64 ticks = (u64)c.QuadPart;
+
+        // us = (ticks * k_q16) >> 16
+        const u32 lo = (u32)(ticks & 0xFFFFFFFFu);
+        const u32 hi = (u32)(ticks >> 32);
+
+        const u64 prod_lo = (u64)lo * (u64)k;
+        const u64 prod_hi = (u64)hi * (u64)k;
+        const u64 prod = prod_lo + (prod_hi << 32);
+
+        return prod >> 16;
+
+#elif defined(__linux__)
+        using namespace native;
+
+        timespec ts{};
+        long r;
+        do {
+            r = sys2(k_sys_clock_gettime, (long)1 /* CLOCK_MONOTONIC */, (long)(uintptr_t)&ts);
+        } while (is_err(r) && err_no(r) == k_eintr);
+
+        if (is_err(r)) return 0;
+
+        return (u64)ts.tv_sec * 1000000ull + (u64)ts.tv_nsec / 1000ull;
+
+#else
+#   error "Not implemented"
 #endif
     }
     // ------------------------------------------------------------------------
@@ -4227,7 +4498,7 @@ void* IO_CDECL operator new[](io::usize bytes, const io::nothrow_t&) noexcept { 
 // ------------------------- delete -------------------------
 void IO_CDECL operator delete(void* p) noexcept { if (p) io::free_aligned(p); }
 void IO_CDECL operator delete[](void* p) noexcept { if (p) io::free_aligned(p); }
-#if defined(_MSC_VER) && defined(_M_IX86) // MSVC sized-delete
+#if defined(_MSC_VER) && defined(IO_ARCH_X86_32) // MSVC sized-delete
     void IO_CDECL operator delete(void* p, unsigned int) noexcept { if (p) io::free_aligned(p); }
     void IO_CDECL operator delete[](void* p, unsigned int) noexcept { if (p) io::free_aligned(p); }
 #else
