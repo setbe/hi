@@ -361,6 +361,9 @@ struct IWindow {
     virtual void onKeyDown(Key) noexcept = 0;
     virtual void onKeyUp(Key) noexcept = 0;
     virtual void onFocusChange(bool gained) noexcept = 0;
+    // Internal input bridge (platform -> widgets). Users usually don't override these.
+    virtual void onNativeKeyEvent(Key, bool) noexcept { }
+    virtual void onTextInput(io::char_view utf8) noexcept { (void)utf8; }
     // --- Defined by library ---
     virtual void Render() noexcept = 0;
     virtual void onGeometryChange(int w, int h) noexcept = 0;
@@ -513,7 +516,7 @@ namespace native {
                 win.onError(Error::Window, AboutError::Window);
                 return;
             }
-            SetWindowLongW(wnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&win));
+            SetWindowLongPtrW(wnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&win));
 
             // ---- 3. Get DC
             HDC new_hdc = GetDC(wnd);
@@ -678,6 +681,13 @@ namespace native {
                     ::SetCursor(nullptr);
                     return TRUE;
                 }
+                // Keep native resize cursor handling on non-client sizing zones.
+                const UINT hit = LOWORD(lparam);
+                if (hit == HTLEFT || hit == HTRIGHT || hit == HTTOP || hit == HTBOTTOM ||
+                    hit == HTTOPLEFT || hit == HTTOPRIGHT || hit == HTBOTTOMLEFT || hit == HTBOTTOMRIGHT ||
+                    hit == HTSIZE || hit == HTGROWBOX) {
+                    return DefWindowProcW(hwnd, msg, wparam, lparam);
+                }
                 const CursorState cs = win->getCursorState();
 
                 if (cs != win->native().getLastCursorState()) {
@@ -702,17 +712,83 @@ namespace native {
                 win->onScroll(0.f, delta / 120.f); // Normalize before callback
                 return 0;
             }
-            case WM_KEYDOWN: win->onKeyDown(HandleKey(wparam, true)); return 0;
-            case WM_KEYUP: win->onKeyUp(HandleKey(wparam, false)); return 0;
+            case WM_KEYDOWN: {
+                const Key k = HandleKey(wparam, true);
+                win->onNativeKeyEvent(k, true);
+                win->onKeyDown(k);
+                return 0;
+            }
+            case WM_KEYUP: {
+                const Key k = HandleKey(wparam, false);
+                win->onNativeKeyEvent(k, false);
+                win->onKeyUp(k);
+                return 0;
+            }
+            case WM_CHAR: {
+                const io::u32 cp = static_cast<io::u32>(wparam);
+                if (cp >= 32u && cp != 127u) {
+                    char utf8[4];
+                    io::usize n = 0;
+                    if (cp <= 0x7Fu) {
+                        utf8[n++] = static_cast<char>(cp);
+                    } else if (cp <= 0x7FFu) {
+                        utf8[n++] = static_cast<char>(0xC0u | (cp >> 6));
+                        utf8[n++] = static_cast<char>(0x80u | (cp & 0x3Fu));
+                    } else if (cp <= 0xFFFFu) {
+                        utf8[n++] = static_cast<char>(0xE0u | (cp >> 12));
+                        utf8[n++] = static_cast<char>(0x80u | ((cp >> 6) & 0x3Fu));
+                        utf8[n++] = static_cast<char>(0x80u | (cp & 0x3Fu));
+                    }
+                    if (n > 0) win->onTextInput(io::char_view{ utf8, n });
+                }
+                return 0;
+            }
+            case WM_UNICHAR: {
+                if (wparam == UNICODE_NOCHAR) return TRUE;
+                const io::u32 cp = static_cast<io::u32>(wparam);
+                if (cp >= 32u && cp != 127u && cp <= 0x10FFFFu) {
+                    char utf8[4];
+                    io::usize n = 0;
+                    if (cp <= 0x7Fu) {
+                        utf8[n++] = static_cast<char>(cp);
+                    } else if (cp <= 0x7FFu) {
+                        utf8[n++] = static_cast<char>(0xC0u | (cp >> 6));
+                        utf8[n++] = static_cast<char>(0x80u | (cp & 0x3Fu));
+                    } else if (cp <= 0xFFFFu) {
+                        utf8[n++] = static_cast<char>(0xE0u | (cp >> 12));
+                        utf8[n++] = static_cast<char>(0x80u | ((cp >> 6) & 0x3Fu));
+                        utf8[n++] = static_cast<char>(0x80u | (cp & 0x3Fu));
+                    } else {
+                        utf8[n++] = static_cast<char>(0xF0u | (cp >> 18));
+                        utf8[n++] = static_cast<char>(0x80u | ((cp >> 12) & 0x3Fu));
+                        utf8[n++] = static_cast<char>(0x80u | ((cp >> 6) & 0x3Fu));
+                        utf8[n++] = static_cast<char>(0x80u | (cp & 0x3Fu));
+                    }
+                    if (n > 0) win->onTextInput(io::char_view{ utf8, n });
+                }
+                return 0;
+            }
             case WM_SYSKEYDOWN:
                 // Handle system keys as ordinary keys
-                if (wparam == VK_F10)       win->onKeyDown(Key::F10);
-                else if (wparam == VK_MENU) win->onKeyDown(Key::Alt);
+                if (wparam == VK_F10) {
+                    win->onNativeKeyEvent(Key::F10, true);
+                    win->onKeyDown(Key::F10);
+                }
+                else if (wparam == VK_MENU) {
+                    win->onNativeKeyEvent(Key::Alt, true);
+                    win->onKeyDown(Key::Alt);
+                }
                 return 0;
             case WM_SYSKEYUP:
                 // Handle system keys as ordinary keys
-                if (wparam == VK_F10)       win->onKeyUp(Key::F10);
-                else if (wparam == VK_MENU) win->onKeyUp(Key::Alt);
+                if (wparam == VK_F10) {
+                    win->onNativeKeyEvent(Key::F10, false);
+                    win->onKeyUp(Key::F10);
+                }
+                else if (wparam == VK_MENU) {
+                    win->onNativeKeyEvent(Key::Alt, false);
+                    win->onKeyUp(Key::Alt);
+                }
                 return 0;
 
             // --- mouse ---
@@ -740,8 +816,6 @@ namespace native {
             }
 
             case WM_NCCREATE: {
-                auto cs = reinterpret_cast<CREATESTRUCTW*>(lparam);
-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)(cs->lpCreateParams));
 //#ifdef _PSAPI_H_ // reduce RAM footprint, not memory fragmention
 //                SetProcessWorkingSetSize(GetCurrentProcess(), -1, -1);
 //                K32EmptyWorkingSet(GetCurrentProcess());
@@ -978,11 +1052,21 @@ namespace glx {
                 case KeyPress:
                 case KeyRelease: {
                     const bool pressed = (e.type == KeyPress);
-                    ::KeySym ks = XLookupKeysym(&e.xkey, 0);
+                    char text_buf[64]{};
+                    ::KeySym ks{};
+                    const int n = XLookupString(&e.xkey, text_buf, (int)sizeof(text_buf), &ks, nullptr);
                     ::hi::Key k = map_key_sym(ks);
                     ::hi::global::key_array[(int)k] = pressed ? 1 : 0;
-                    if (pressed) win.onKeyDown(k);
-                    else         win.onKeyUp(k);
+                    win.onNativeKeyEvent(k, pressed);
+                    if (pressed) {
+                        win.onKeyDown(k);
+                        if (n > 0) {
+                            // XLookupString follows keyboard layout; pass UTF-8-ish bytes to widgets.
+                            win.onTextInput(io::char_view{ text_buf, static_cast<io::usize>(n) });
+                        }
+                    } else {
+                        win.onKeyUp(k);
+                    }
                     break;
                 }
             }
@@ -1655,6 +1739,13 @@ namespace glx {
         TextStyle normal{};
         TextStyle hover{};
         TextStyle active{};
+        bool border = true;
+        float border_radius = 6.f;
+        bool underscored = false;
+        float pad_top = 4.f;
+        float pad_left = 8.f;
+        float pad_right = 8.f;
+        float pad_bottom = 4.f;
         float pad_x = 8.f; // px
         float pad_y = 4.f; // px
     };
@@ -1680,6 +1771,88 @@ namespace glx {
         bool held = false;
         bool clicked = false;
         float x0 = 0, y0 = 0, x1 = 0, y1 = 0; // rect (px)
+    };
+
+    struct UiBoxStyle {
+        bool border = true;
+        float border_radius = 6.f;
+        bool underscored = false;
+        float pad_top = 4.f;
+        float pad_left = 8.f;
+        float pad_right = 8.f;
+        float pad_bottom = 4.f;
+    };
+
+    struct TextFieldStyle {
+        TextStyle normal{};
+        TextStyle hover{};
+        TextStyle active{};
+        UiBoxStyle box{};
+        io::char_view placeholder{};
+        float min_width = 140.f;
+    };
+
+    struct TextFieldDraw {
+        AtlasId atlas = -1;
+        TextDock dock = TextDock::TopL;
+
+        float x = 0.f, y = 0.f;
+        float scale = 1.f;
+
+        io::char_view_mut text{};
+        io::usize* text_len = nullptr; // if null, length is resolved from first '\0'
+        io::u64 id = 0; // optional stable id; if 0 then text.data() is used
+
+        float line_height = 1.0f;
+        float tab_width = 4.0f;
+        float space_between = 0.0f;
+
+        TextFieldStyle style{};
+    };
+
+    struct TextFieldState {
+        bool hovered = false;
+        bool active = false;
+        bool changed = false;
+        bool submitted = false;
+        bool has_selection = false;
+        io::usize cursor = 0;
+        io::usize select_begin = 0;
+        io::usize select_end = 0;
+        float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+    };
+
+    struct SliderStyle {
+        TextStyle normal{};
+        TextStyle hover{};
+        TextStyle active{};
+        UiBoxStyle box{};
+        float min_width = 160.f;
+        float track_height = 4.f;
+        float track_gap = 6.f; // gap from text box to track
+        float handle_size = 10.f; // square for speed
+    };
+
+    struct SliderDraw {
+        AtlasId atlas = -1;
+        TextDock dock = TextDock::TopL;
+        float x = 0.f, y = 0.f;
+        float scale = 1.f;
+        io::char_view text{};
+        float* value = nullptr;
+        float min_value = 0.f;
+        float max_value = 1.f;
+        float step = 0.f; // 0 -> continuous
+        io::u64 id = 0;
+        SliderStyle style{};
+    };
+
+    struct SliderState {
+        bool hovered = false;
+        bool held = false;
+        bool changed = false;
+        float value = 0.f;
+        float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
     };
 
 
@@ -1787,6 +1960,184 @@ namespace internal {
     static inline io::u32 pack_rgba8(float r,float g,float b,float a) noexcept {
         io::u32 R = io::f2u8(r), G = io::f2u8(g), B = io::f2u8(b), A = io::f2u8(a);
         return (A<<24) | (B<<16) | (G<<8) | (R<<0); // little-endian packed
+    }
+    static IO_CONSTEXPR_VAR float k_ui_glyph_border_gap_mul = 1.15f;
+    static IO_CONSTEXPR_VAR float k_ui_outer_pad_mul = 1.0f + k_ui_glyph_border_gap_mul;
+
+    static inline bool utf8_is_cont(io::u8 c) noexcept { return (c & 0xC0u) == 0x80u; }
+
+    static inline io::usize utf8_clamp_boundary(io::char_view s, io::usize pos) noexcept {
+        if (pos > s.size()) pos = s.size();
+        const io::u8* p = reinterpret_cast<const io::u8*>(s.data());
+        while (pos > 0 && pos < s.size() && utf8_is_cont(p[pos])) --pos;
+        return pos;
+    }
+
+    static inline io::usize utf8_prev_boundary(io::char_view s, io::usize pos) noexcept {
+        pos = utf8_clamp_boundary(s, pos);
+        if (pos == 0) return 0;
+        const io::u8* p = reinterpret_cast<const io::u8*>(s.data());
+        --pos;
+        while (pos > 0 && utf8_is_cont(p[pos])) --pos;
+        return pos;
+    }
+
+    static inline io::usize utf8_next_boundary(io::char_view s, io::usize pos) noexcept {
+        pos = utf8_clamp_boundary(s, pos);
+        if (pos >= s.size()) return s.size();
+        io::usize it = pos;
+        io::u32 cp = 0;
+        if (!utf8_next(s, it, cp)) {
+            (void)cp;
+            return pos + 1;
+        }
+        return it;
+    }
+
+    static inline io::usize utf8_encode(io::u32 cp, char out[4]) noexcept {
+        if (cp <= 0x7Fu) {
+            out[0] = static_cast<char>(cp);
+            return 1;
+        }
+        if (cp <= 0x7FFu) {
+            out[0] = static_cast<char>(0xC0u | (cp >> 6));
+            out[1] = static_cast<char>(0x80u | (cp & 0x3Fu));
+            return 2;
+        }
+        if (cp <= 0xFFFFu) {
+            out[0] = static_cast<char>(0xE0u | (cp >> 12));
+            out[1] = static_cast<char>(0x80u | ((cp >> 6) & 0x3Fu));
+            out[2] = static_cast<char>(0x80u | (cp & 0x3Fu));
+            return 3;
+        }
+        if (cp <= 0x10FFFFu) {
+            out[0] = static_cast<char>(0xF0u | (cp >> 18));
+            out[1] = static_cast<char>(0x80u | ((cp >> 12) & 0x3Fu));
+            out[2] = static_cast<char>(0x80u | ((cp >> 6) & 0x3Fu));
+            out[3] = static_cast<char>(0x80u | (cp & 0x3Fu));
+            return 4;
+        }
+        return 0;
+    }
+
+    static inline io::usize cstr_bounded_len(io::char_view_mut buf) noexcept {
+        if (!buf.data() || buf.size() == 0) return 0;
+        io::usize n = 0;
+        while (n < buf.size() && buf[n] != '\0') ++n;
+        return n;
+    }
+
+    static inline io::usize text_capacity_chars(io::char_view_mut buf) noexcept {
+        return (buf.size() > 0) ? (buf.size() - 1) : 0;
+    }
+
+    static inline void text_write_terminator(io::char_view_mut buf, io::usize len) noexcept {
+        if (!buf.data() || buf.size() == 0) return;
+        const io::usize cap = text_capacity_chars(buf);
+        if (len > cap) len = cap;
+        buf[len] = '\0';
+    }
+
+    static inline void text_erase(io::char_view_mut buf, io::usize& len, io::usize a, io::usize b) noexcept {
+        if (!buf.data() || buf.size() == 0) return;
+        if (a > b) { io::usize t = a; a = b; b = t; }
+        if (a > len) a = len;
+        if (b > len) b = len;
+        if (a == b) return;
+
+        const io::usize tail = len - b;
+        for (io::usize i = 0; i < tail; ++i) buf[a + i] = buf[b + i];
+        len -= (b - a);
+        text_write_terminator(buf, len);
+    }
+
+    static inline io::usize text_insert(io::char_view_mut buf, io::usize& len, io::usize at,
+                                        io::char_view src) noexcept {
+        if (!buf.data() || buf.size() == 0 || !src.data() || src.size() == 0) return 0;
+        if (at > len) at = len;
+        const io::usize cap = text_capacity_chars(buf);
+        if (len >= cap) return 0;
+
+        io::usize can = src.size();
+        if (can > (cap - len)) can = (cap - len);
+        if (can == 0) return 0;
+
+        for (io::usize i = len; i > at; --i) {
+            buf[i + can - 1] = buf[i - 1];
+        }
+        for (io::usize i = 0; i < can; ++i) buf[at + i] = src[i];
+        len += can;
+        text_write_terminator(buf, len);
+        return can;
+    }
+
+    static inline bool clipboard_set(IWindow& win, io::char_view utf8) noexcept {
+#if defined(IO_IMPLEMENTATION) && defined(_WIN32)
+        io::wstring wide{};
+        if (!io::native::utf8_to_wide(utf8, wide)) return false;
+        HWND hwnd = win.native().getHwnd();
+        if (!hwnd || !OpenClipboard(hwnd)) return false;
+        EmptyClipboard();
+
+        const io::usize chars = wide.size() + 1; // include '\0'
+        HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, chars * sizeof(wchar_t));
+        if (!h) { CloseClipboard(); return false; }
+
+        void* ptr = GlobalLock(h);
+        if (!ptr) { GlobalFree(h); CloseClipboard(); return false; }
+        const wchar_t* src = wide.c_str();
+        wchar_t* dst = reinterpret_cast<wchar_t*>(ptr);
+        for (io::usize i = 0; i < chars; ++i) dst[i] = src[i];
+        GlobalUnlock(h);
+
+        if (!SetClipboardData(CF_UNICODETEXT, h)) {
+            GlobalFree(h);
+            CloseClipboard();
+            return false;
+        }
+        CloseClipboard();
+        return true;
+#elif defined(IO_IMPLEMENTATION) && defined(__linux__)
+        auto* dpy = win.native().dpy();
+        if (!dpy) return false;
+        XStoreBytes(dpy, utf8.data(), (int)utf8.size());
+        XFlush(dpy);
+        return true;
+#else
+        (void)win; (void)utf8;
+        return false;
+#endif
+    }
+
+    static inline bool clipboard_get(IWindow& win, io::string& out_utf8) noexcept {
+        out_utf8.clear();
+#if defined(IO_IMPLEMENTATION) && defined(_WIN32)
+        HWND hwnd = win.native().getHwnd();
+        if (!hwnd || !OpenClipboard(hwnd)) return false;
+        HANDLE h = GetClipboardData(CF_UNICODETEXT);
+        if (!h) { CloseClipboard(); return false; }
+        const wchar_t* w = reinterpret_cast<const wchar_t*>(GlobalLock(h));
+        if (!w) { CloseClipboard(); return false; }
+        const bool ok = io::native::wide_to_utf8(w, out_utf8);
+        GlobalUnlock(h);
+        CloseClipboard();
+        return ok;
+#elif defined(IO_IMPLEMENTATION) && defined(__linux__)
+        auto* dpy = win.native().dpy();
+        if (!dpy) return false;
+        int n = 0;
+        char* p = XFetchBytes(dpy, &n);
+        if (!p || n <= 0) {
+            if (p) XFree(p);
+            return false;
+        }
+        const bool ok = out_utf8.append(io::char_view{ p, static_cast<io::usize>(n) });
+        XFree(p);
+        return ok;
+#else
+        (void)win;
+        return false;
+#endif
     }
     
 #pragma region shaders
@@ -1918,6 +2269,77 @@ namespace internal {
         "void main(){\n"
         "  Frag = texture(uTex, vUV);\n"
         "}\n";
+
+    static const char* k_ui_vs_330 =
+        "#version 330 core\n"
+        "layout(location=0) in vec2 aPos;\n"
+        "layout(location=1) in vec4 aFill;\n"
+        "layout(location=2) in vec4 aBorder;\n"
+        "out vec2 vPos;\n"
+        "out vec4 vFill;\n"
+        "out vec4 vBorder;\n"
+        "uniform vec2 uViewport;\n"
+        "void main(){\n"
+        "  vPos = aPos;\n"
+        "  vFill = aFill;\n"
+        "  vBorder = aBorder;\n"
+        "  vec2 ndc = vec2((aPos.x / uViewport.x) * 2.0 - 1.0,\n"
+        "                  1.0 - (aPos.y / uViewport.y) * 2.0);\n"
+        "  gl_Position = vec4(ndc, 0.0, 1.0);\n"
+        "}\n";
+
+    static const char* k_ui_fs_330 =
+        "#version 330 core\n"
+        "in vec2 vPos;\n"
+        "in vec4 vFill;\n"
+        "in vec4 vBorder;\n"
+        "out vec4 Frag;\n"
+        "uniform vec2 uRectMin;\n"
+        "uniform vec2 uRectMax;\n"
+        "uniform vec2 uPadTL;\n"
+        "uniform vec2 uPadBR;\n"
+        "uniform float uRadius;\n"
+        "uniform float uBorderPx;\n"
+        "uniform bool uBorderEnabled;\n"
+        "uniform bool uUnderscored;\n"
+        "uniform bool uSlider;\n"
+        "\n"
+        "float sdRoundRect(vec2 p, vec2 center, vec2 halfSize, float r){\n"
+        "  vec2 q = abs(p - center) - (halfSize - vec2(r));\n"
+        "  return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;\n"
+        "}\n"
+        "\n"
+        "void main(){\n"
+        "  vec2 mn = uRectMin + vec2(uPadTL.x, uPadTL.y);\n"
+        "  vec2 mx = uRectMax - vec2(uPadBR.x, uPadBR.y);\n"
+        "  if (mx.x <= mn.x || mx.y <= mn.y) discard;\n"
+        "\n"
+        "  float r = uBorderEnabled ? min(uRadius, min(mx.x - mn.x, mx.y - mn.y) * 0.5) : 0.0;\n"
+        "  vec2 center = 0.5 * (mn + mx);\n"
+        "  vec2 halfSize = 0.5 * (mx - mn);\n"
+        "  float d = sdRoundRect(vPos, center, halfSize, r);\n"
+        "  float aa = 1.0;\n"
+        "\n"
+        "  float fillA = 1.0 - smoothstep(0.0, aa, d);\n"
+        "  float borderA = 0.0;\n"
+        "  if (uBorderEnabled) {\n"
+        "    float t = max(uBorderPx, 1.0);\n"
+        "    borderA = smoothstep(-t-aa, -t+aa, d) - smoothstep(-aa, +aa, d);\n"
+        "    borderA = clamp(borderA, 0.0, 1.0);\n"
+        "  }\n"
+        "\n"
+        "  if (uUnderscored) {\n"
+        "    float y = mx.y - 1.0;\n"
+        "    float line = 1.0 - smoothstep(0.0, 1.0, abs(vPos.y - y) - 0.5);\n"
+        "    float inX = step(mn.x, vPos.x) * step(vPos.x, mx.x);\n"
+        "    borderA = max(borderA, line * inX);\n"
+        "  }\n"
+        "\n"
+        "  float sliderBoost = uSlider ? 0.82 : 1.0;\n"
+        "  vec4 fill = vec4(vFill.rgb, vFill.a * fillA * sliderBoost);\n"
+        "  vec4 border = vec4(vBorder.rgb, vBorder.a * borderA);\n"
+        "  Frag = border + fill * (1.0 - border.a);\n"
+        "}\n";
 #pragma endregion shaders
 
     // ------------------------------
@@ -1943,6 +2365,38 @@ namespace internal {
             return u;
         }
     };
+    struct ui_vertex {
+        float x, y;
+        io::u32 fill_rgba;
+        io::u32 border_rgba;
+    };
+    struct ui_uniforms {
+        int uViewport = -1;
+        int uRectMin = -1;
+        int uRectMax = -1;
+        int uPadTL = -1;
+        int uPadBR = -1;
+        int uRadius = -1;
+        int uBorderPx = -1;
+        int uBorderEnabled = -1;
+        int uUnderscored = -1;
+        int uSlider = -1;
+
+        static inline ui_uniforms query(io::u32 prog) noexcept {
+            ui_uniforms u{};
+            u.uViewport = gl::GetUniformLocation(prog, "uViewport");
+            u.uRectMin = gl::GetUniformLocation(prog, "uRectMin");
+            u.uRectMax = gl::GetUniformLocation(prog, "uRectMax");
+            u.uPadTL = gl::GetUniformLocation(prog, "uPadTL");
+            u.uPadBR = gl::GetUniformLocation(prog, "uPadBR");
+            u.uRadius = gl::GetUniformLocation(prog, "uRadius");
+            u.uBorderPx = gl::GetUniformLocation(prog, "uBorderPx");
+            u.uBorderEnabled = gl::GetUniformLocation(prog, "uBorderEnabled");
+            u.uUnderscored = gl::GetUniformLocation(prog, "uUnderscored");
+            u.uSlider = gl::GetUniformLocation(prog, "uSlider");
+            return u;
+        }
+    };
     IO_NODISCARD static inline io::u32 build_text_program(FontAtlasMode mode) noexcept {
         io::u32 vs=0, fs=0, prog=0;
         if (!gl::Shader::compile_shader(vs, gl::ShaderType::VertexShader, k_text_vs_330)) return 0;
@@ -1953,6 +2407,22 @@ namespace internal {
                                                       k_text_fs_debug_rgba_330;
         if (!gl::Shader::compile_shader(fs, gl::ShaderType::FragmentShader, fsrc)) { gl::DeleteShader(vs); return 0; }
         if (!gl::Shader::link_program(prog, vs, fs)) { gl::DeleteShader(vs); gl::DeleteShader(fs); return 0; }
+        gl::DeleteShader(vs);
+        gl::DeleteShader(fs);
+        return prog;
+    }
+    IO_NODISCARD static inline io::u32 build_ui_program() noexcept {
+        io::u32 vs = 0, fs = 0, prog = 0;
+        if (!gl::Shader::compile_shader(vs, gl::ShaderType::VertexShader, k_ui_vs_330)) return 0;
+        if (!gl::Shader::compile_shader(fs, gl::ShaderType::FragmentShader, k_ui_fs_330)) {
+            gl::DeleteShader(vs);
+            return 0;
+        }
+        if (!gl::Shader::link_program(prog, vs, fs)) {
+            gl::DeleteShader(vs);
+            gl::DeleteShader(fs);
+            return 0;
+        }
         gl::DeleteShader(vs);
         gl::DeleteShader(fs);
         return prog;
@@ -2324,6 +2794,66 @@ namespace internal {
         return bb;
     }
 
+    static inline float glyph_advance_px(const font_atlas& A, const TextDraw& d,
+                                         float element_scale, io::u32 cp, float pen_x) noexcept {
+        const float scale = d.scale * element_scale;
+        const float line_px = (float)A.pixel_height * scale * ((d.line_height <= 0.f) ? 1.f : d.line_height);
+        const float space_px = line_px * 0.5f;
+        const float tab_px = space_px * ((d.tab_width <= 0.f) ? 4.f : d.tab_width);
+        float sb = d.space_between;
+        if (sb < -1.f) sb = -1.f;
+        if (sb > 1.f) sb = 1.f;
+        const float extra_px = sb * space_px;
+
+        if (cp == '\t') {
+            const float k = (tab_px > 1e-6f) ? io::ceil(pen_x / tab_px) : 0.f;
+            return (k * tab_px) - pen_x;
+        }
+        if (cp == ' ') return space_px + extra_px;
+
+        io::u32 gi = 0;
+        if (A.map.find(cp, gi)) {
+            const auto& G = A.glyphs[gi];
+            return (float)G.advance * A.scale * scale + extra_px;
+        }
+        return extra_px;
+    }
+
+    static inline float text_advance_to_byte(const font_atlas& A, const TextDraw& d, float element_scale,
+                                             io::char_view text, io::usize byte_pos) noexcept {
+        if (byte_pos > text.size()) byte_pos = text.size();
+        byte_pos = utf8_clamp_boundary(text, byte_pos);
+
+        float x = 0.f;
+        io::usize it = 0;
+        io::u32 cp = 0;
+        while (it < byte_pos && utf8_next(text, it, cp)) {
+            if (cp == '\n') break;
+            x += glyph_advance_px(A, d, element_scale, cp, x);
+        }
+        return x;
+    }
+
+    static inline io::usize text_hit_test_byte(const font_atlas& A, const TextDraw& d, float element_scale,
+                                                io::char_view text, float x_px) noexcept {
+        if (x_px <= 0.f) return 0;
+        io::usize it = 0;
+        io::usize best = 0;
+        float x = 0.f;
+        io::u32 cp = 0;
+
+        while (utf8_next(text, it, cp)) {
+            if (cp == '\n') break;
+            const io::usize next = it;
+            const float adv = glyph_advance_px(A, d, element_scale, cp, x);
+            const float mid = x + adv * 0.5f;
+            if (x_px < mid) return best;
+            x += adv;
+            best = next;
+        }
+        return best;
+    }
+
     static inline void dock_anchor_px(TextDock dock, float vw, float vh, float& ax, float& ay) noexcept {
         switch (dock) {
         case TextDock::TopL:    ax = 0.f;       ay = 0.f;    break;
@@ -2451,8 +2981,25 @@ namespace internal {
                 gl::AttrOf<float>(2),  // params
             };
             gl::MeshBinder::setup(_text_vao, _text_vbo, io::view<const gl::Attr>(attrs, sizeof(attrs) / sizeof(attrs[0])));
+
+            static const gl::Attr ui_attrs[] = {
+                gl::AttrOf<float>(2),           // pos
+                gl::AttrOf<io::u8>(4, true),    // fill color
+                gl::AttrOf<io::u8>(4, true),    // border color
+            };
+            gl::MeshBinder::setup(_ui_vao, _ui_vbo, io::view<const gl::Attr>(ui_attrs, sizeof(ui_attrs) / sizeof(ui_attrs[0])));
+
+            _ui_prog = internal::build_ui_program();
+            if (_ui_prog) {
+                _ui_uniforms = internal::ui_uniforms::query(_ui_prog);
+            }
         }
-        inline ~Window() noexcept { }
+        inline ~Window() noexcept {
+            if (_ui_prog) {
+                gl::DeleteProgram(_ui_prog);
+                _ui_prog = 0;
+            }
+        }
 
         // Non-copyable, non-movable
         Window(const Window&) = delete;
@@ -2475,6 +3022,8 @@ namespace internal {
         inline void onKeyDown(Key k)           noexcept override { }
         inline void onKeyUp(Key k)             noexcept override { }
         inline void onFocusChange(bool gained) noexcept override { }
+        inline void onNativeKeyEvent(Key k, bool pressed) noexcept override;
+        inline void onTextInput(io::char_view utf8) noexcept override;
 
         // Implemented by this class
         inline void onGeometryChange(int w, int h) noexcept override;
@@ -2490,10 +3039,15 @@ namespace internal {
         IO_NODISCARD inline float mouseX() const noexcept override { return _mouse_x; }
         IO_NODISCARD inline float mouseY() const noexcept override { return _mouse_y; }
         IO_NODISCARD CursorState getCursorState() const noexcept override {
+            const float edge = 6.f * (_ui_scale > 0.f ? _ui_scale : 1.f);
+            const bool near_lr = (_mouse_x <= edge) || (_mouse_x >= ((float)_width - edge));
+            const bool near_tb = (_mouse_y <= edge) || (_mouse_y >= ((float)_height - edge));
             return _is_cursor_edits_text      ? CursorState::TextEdit :
                    _is_cursor_hresize         ? CursorState::HResizing :
                    _is_cursor_vresize         ? CursorState::VResizing :
                    _is_cursor_hovering_button ? CursorState::HoversButton :
+                   near_lr                    ? CursorState::HResizing :
+                   near_tb                    ? CursorState::VResizing :
                                                 CursorState::Default;
         }
         IO_NODISCARD inline bool isShown() const noexcept override { return _shown; }
@@ -2551,6 +3105,8 @@ namespace internal {
         // --- GUI --- 
 
         ButtonState Button(const ButtonDraw& b) noexcept;
+        TextFieldState TextField(const TextFieldDraw& tf) noexcept;
+        SliderState Slider(const SliderDraw& s) noexcept;
         void DrawText(const TextDraw& d) noexcept;
         void FlushText() noexcept; // Call once per frame inside Render() (or end of Render())
 
@@ -2560,6 +3116,25 @@ namespace internal {
         inline void setMouseDown(bool v) noexcept override { _mouse_down = v; }
 
     private:
+        struct key_event {
+            Key key{ Key::__NONE__ };
+            bool pressed{ false };
+        };
+        struct text_field_runtime {
+            io::u64 id = 0;
+            io::usize cursor = 0;
+            io::usize anchor = 0;
+            bool dragging = false;
+        };
+
+        inline text_field_runtime* findOrCreateTextField(io::u64 id) noexcept;
+        inline float clampSliderValue(float v, float min_v, float max_v, float step) const noexcept;
+        inline void drawUiRect(float x0, float y0, float x1, float y1,
+                               io::u32 fill_rgba, io::u32 border_rgba,
+                               const UiBoxStyle& style,
+                               bool slider = false,
+                               float border_px = 1.f) noexcept;
+
         // --- window ---
         native::Window _native_window;
         int _width;
@@ -2597,12 +3172,110 @@ namespace internal {
         };
         gl::VertexArray _text_vao;
         gl::Buffer      _text_vbo{ gl::BufferTarget::ArrayBuffer };
+        gl::VertexArray _ui_vao;
+        gl::Buffer      _ui_vbo{ gl::BufferTarget::ArrayBuffer };
+        io::u32 _ui_prog = 0;
+        internal::ui_uniforms _ui_uniforms{};
         io::vector<io::string> _font_paths;
         io::vector<internal::font_atlas> _atlases;
         internal::text_queue _textq;
+
+        io::vector<key_event> _key_events;
+        io::string _text_input_utf8;
+        bool _ui_input_consumed = false;
+
+        io::vector<text_field_runtime> _text_fields;
+        io::u64 _active_text_field = 0;
+        io::u64 _active_slider = 0;
     }; // struct Window
 
 #ifdef IO_IMPLEMENTATION
+    template <typename Derived>
+    inline void Window<Derived>::onNativeKeyEvent(Key k, bool pressed) noexcept {
+        key_event ev{};
+        ev.key = k;
+        ev.pressed = pressed;
+        (void)_key_events.push_back(ev);
+    }
+
+    template <typename Derived>
+    inline void Window<Derived>::onTextInput(io::char_view utf8) noexcept {
+        if (!utf8.data() || utf8.size() == 0) return;
+        (void)_text_input_utf8.append(utf8);
+    }
+
+    template <typename Derived>
+    inline typename Window<Derived>::text_field_runtime* Window<Derived>::findOrCreateTextField(io::u64 id) noexcept {
+        for (io::usize i = 0; i < _text_fields.size(); ++i) {
+            if (_text_fields[i].id == id) return &_text_fields[i];
+        }
+        text_field_runtime st{};
+        st.id = id;
+        if (!_text_fields.push_back(st)) return nullptr;
+        return &_text_fields[_text_fields.size() - 1];
+    }
+
+    template <typename Derived>
+    inline float Window<Derived>::clampSliderValue(float v, float min_v, float max_v, float step) const noexcept {
+        if (max_v < min_v) {
+            const float t = min_v;
+            min_v = max_v;
+            max_v = t;
+        }
+        if (v < min_v) v = min_v;
+        if (v > max_v) v = max_v;
+        if (step > 0.f) {
+            const float n = (v - min_v) / step;
+            const int ni = (int)(n + (n >= 0.f ? 0.5f : -0.5f));
+            v = min_v + (float)ni * step;
+            if (v < min_v) v = min_v;
+            if (v > max_v) v = max_v;
+        }
+        return v;
+    }
+
+    template <typename Derived>
+    inline void Window<Derived>::drawUiRect(float x0, float y0, float x1, float y1,
+                                            io::u32 fill_rgba, io::u32 border_rgba,
+                                            const UiBoxStyle& style,
+                                            bool slider,
+                                            float border_px) noexcept {
+        if (!_ui_prog || x1 <= x0 || y1 <= y0) return;
+
+        internal::ui_vertex v[6]{};
+        auto V = [&](int i, float x, float y) {
+            v[i].x = x;
+            v[i].y = y;
+            v[i].fill_rgba = fill_rgba;
+            v[i].border_rgba = border_rgba;
+        };
+        V(0, x0, y0); V(1, x1, y0); V(2, x1, y1);
+        V(3, x0, y0); V(4, x1, y1); V(5, x0, y1);
+
+        _ui_vao.bind();
+        _ui_vbo.bind();
+        _ui_vbo.data(v, sizeof(v), gl::BufferUsage::DynamicDraw);
+
+        gl::Enable(gl::Capability::Blend);
+        gl::BlendFunc(gl::BlendFactor::SrcAlpha, gl::BlendFactor::OneMinusSrcAlpha);
+
+        gl::UseProgram(_ui_prog);
+        if (_ui_uniforms.uViewport >= 0) gl::Uniform2f(_ui_uniforms.uViewport, (float)width(), (float)height());
+        if (_ui_uniforms.uRectMin >= 0) gl::Uniform2f(_ui_uniforms.uRectMin, x0, y0);
+        if (_ui_uniforms.uRectMax >= 0) gl::Uniform2f(_ui_uniforms.uRectMax, x1, y1);
+        if (_ui_uniforms.uPadTL >= 0) gl::Uniform2f(_ui_uniforms.uPadTL, style.pad_left, style.pad_top);
+        if (_ui_uniforms.uPadBR >= 0) gl::Uniform2f(_ui_uniforms.uPadBR, style.pad_right, style.pad_bottom);
+        if (_ui_uniforms.uRadius >= 0) gl::Uniform1f(_ui_uniforms.uRadius, style.border_radius);
+        if (_ui_uniforms.uBorderPx >= 0) gl::Uniform1f(_ui_uniforms.uBorderPx, border_px);
+        if (_ui_uniforms.uBorderEnabled >= 0) gl::Uniform1i(_ui_uniforms.uBorderEnabled, style.border ? 1 : 0);
+        if (_ui_uniforms.uUnderscored >= 0) gl::Uniform1i(_ui_uniforms.uUnderscored, style.underscored ? 1 : 0);
+        if (_ui_uniforms.uSlider >= 0) gl::Uniform1i(_ui_uniforms.uSlider, slider ? 1 : 0);
+
+        gl::DrawArrays(gl::PrimitiveMode::Triangles, 0, 6);
+        gl::BindVertexArray(0);
+        gl::UseProgram(0);
+    }
+
     template <typename Derived>
     inline void Window<Derived>::onGeometryChange(int w, int h) noexcept {
         _width=w; _height=h; // Update window size
@@ -2616,12 +3289,16 @@ namespace internal {
         } // switch renderer
 
         onWindowResize(w, h); // Call user defined callback
-        onRender(0.f); // Rerender the window without frame delta
+        onRender(7.f); // Rerender the window with custom frame delta
         SwapBuffers();
     } // onGeometryChange
 
     template <typename Derived>
     IO_NODISCARD inline bool Window<Derived>::PollEvents() noexcept {
+        _key_events.clear();
+        _text_input_utf8.clear();
+        _ui_input_consumed = false;
+
         const bool prev = _mouse_down;
 
         // const Window<Derived>* -> IWindow&
@@ -2907,9 +3584,18 @@ namespace internal {
         float x1 = origin_x + bb.max_x;
         float y1 = origin_y + bb.max_y;
 
-        // padding
-        x0 -= b.style.pad_x; y0 -= b.style.pad_y;
-        x1 += b.style.pad_x; y1 += b.style.pad_y;
+        const bool css_pad_custom =
+            (b.style.pad_left != 8.f) || (b.style.pad_right != 8.f) ||
+            (b.style.pad_top != 4.f) || (b.style.pad_bottom != 4.f);
+        const float pad_l = css_pad_custom ? b.style.pad_left : b.style.pad_x;
+        const float pad_r = css_pad_custom ? b.style.pad_right : b.style.pad_x;
+        const float pad_t = css_pad_custom ? b.style.pad_top : b.style.pad_y;
+        const float pad_b = css_pad_custom ? b.style.pad_bottom : b.style.pad_y;
+
+        x0 -= pad_l * internal::k_ui_glyph_border_gap_mul;
+        y0 -= pad_t * internal::k_ui_glyph_border_gap_mul;
+        x1 += pad_r * internal::k_ui_glyph_border_gap_mul;
+        y1 += pad_b * internal::k_ui_glyph_border_gap_mul;
 
         out.x0 = x0; out.y0 = y0; out.x1 = x1; out.y1 = y1;
 
@@ -2919,18 +3605,467 @@ namespace internal {
         out.clicked = out.hovered && mouse_released; // release inside
 
         // 4) style
+        TextStyle ts{};
         if (out.held) {
-            td.style = b.style.active;
+            ts = b.style.active;
         }
         else if (out.hovered) {
             _is_cursor_hovering_button = true;
-            td.style = b.style.hover;
+            ts = b.style.hover;
         }
         else {
-            td.style = b.style.normal;
+            ts = b.style.normal;
         }
 
-        // 5) draw
+        if (!ts.outline) {
+            ts.outline = true;
+            ts.or_ = ts.r; ts.og_ = ts.g; ts.ob_ = ts.b; ts.oa_ = ts.a;
+        }
+        td.style = ts;
+
+        UiBoxStyle box{};
+        box.border = b.style.border;
+        box.border_radius = b.style.border_radius;
+        box.underscored = b.style.underscored;
+        box.pad_top = 0.f; box.pad_left = 0.f; box.pad_right = 0.f; box.pad_bottom = 0.f;
+
+        const float bg_a = out.held ? 0.24f : (out.hovered ? 0.17f : 0.11f);
+        const io::u32 fill_col = internal::pack_rgba8(ts.r, ts.g, ts.b, bg_a);
+        const io::u32 border_col = internal::pack_rgba8(ts.or_, ts.og_, ts.ob_, ts.oa_);
+        drawUiRect(x0, y0, x1, y1, fill_col, border_col, box, false, 1.f);
+
+        // 5) draw text (batched)
+        DrawText(td);
+
+        return out;
+    }
+
+    template <typename Derived>
+    inline TextFieldState Window<Derived>::TextField(const TextFieldDraw& tf) noexcept {
+        TextFieldState out{};
+        if (tf.atlas < 0 || (io::u32)tf.atlas >= _atlases.size()) return out;
+        if (!tf.text.data() || tf.text.size() == 0) return out;
+        const internal::font_atlas& A = _atlases[(io::u32)tf.atlas];
+
+        const io::u64 fallback_id = (io::u64)reinterpret_cast<io::usize>(tf.text.data());
+        const io::u64 id = (tf.id != 0) ? tf.id : (fallback_id != 0 ? fallback_id : 1u);
+        auto* rt = findOrCreateTextField(id);
+        if (!rt) return out;
+
+        io::usize len = tf.text_len ? *tf.text_len : internal::cstr_bounded_len(tf.text);
+        const io::usize cap = internal::text_capacity_chars(tf.text);
+        if (len > cap) len = cap;
+        internal::text_write_terminator(tf.text, len);
+        if (tf.text_len) *tf.text_len = len;
+
+        auto view_now = [&]() noexcept { return io::char_view{ tf.text.data(), len }; };
+        io::char_view txt = view_now();
+        rt->cursor = internal::utf8_clamp_boundary(txt, rt->cursor);
+        rt->anchor = internal::utf8_clamp_boundary(txt, rt->anchor);
+
+        TextDraw td{};
+        td.atlas = tf.atlas;
+        td.dock = tf.dock;
+        td.x = tf.x; td.y = tf.y;
+        td.scale = tf.scale;
+        td.text = (!txt.empty()) ? txt : tf.style.placeholder;
+        td.line_height = tf.line_height;
+        td.tab_width = tf.tab_width;
+        td.space_between = tf.space_between;
+
+        const float vw = (float)width();
+        const float vh = (float)height();
+        float ax = 0.f, ay = 0.f;
+        internal::dock_anchor_px(tf.dock, vw, vh, ax, ay);
+        const auto bb = internal::measure_text_bbox_px(A, td, _ui_scale);
+        float dx = 0.f, dy = 0.f;
+        internal::dock_align_shift(tf.dock, bb, dx, dy);
+
+        const float origin_x = ax + tf.x + dx;
+        const float origin_y = ay + tf.y + dy;
+
+        const float pad_l_out = tf.style.box.pad_left * internal::k_ui_outer_pad_mul;
+        const float pad_t_out = tf.style.box.pad_top * internal::k_ui_outer_pad_mul;
+        const float pad_r_out = tf.style.box.pad_right * internal::k_ui_outer_pad_mul;
+        const float pad_b_out = tf.style.box.pad_bottom * internal::k_ui_outer_pad_mul;
+
+        float x0 = origin_x + bb.min_x - pad_l_out;
+        float y0 = origin_y + bb.min_y - pad_t_out;
+        float x1 = origin_x + bb.max_x + pad_r_out;
+        float y1 = origin_y + bb.max_y + pad_b_out;
+        if ((x1 - x0) < tf.style.min_width) x1 = x0 + tf.style.min_width;
+
+        out.x0 = x0; out.y0 = y0; out.x1 = x1; out.y1 = y1;
+
+        const float mx = mouseX();
+        const float my = mouseY();
+        out.hovered = (mx >= x0 && mx <= x1 && my >= y0 && my <= y1);
+        if (out.hovered) _is_cursor_edits_text = true;
+
+        const bool mouse_pressed = _mouse_down && !_prev_mouse_down;
+        if (mouse_pressed) {
+            if (out.hovered) {
+                _active_text_field = id;
+                _active_slider = 0;
+                rt->dragging = true;
+                const io::char_view tv = view_now();
+                const float local_x = mx - origin_x;
+                const io::usize hit = internal::text_hit_test_byte(A, td, _ui_scale, tv, local_x);
+                rt->cursor = hit;
+                rt->anchor = hit;
+            } else if (_active_text_field == id) {
+                _active_text_field = 0;
+                rt->dragging = false;
+            }
+        }
+
+        if (!_mouse_down) rt->dragging = false;
+        if (_mouse_down && rt->dragging && _active_text_field == id) {
+            const io::char_view tv = view_now();
+            const float local_x = mx - origin_x;
+            rt->cursor = internal::text_hit_test_byte(A, td, _ui_scale, tv, local_x);
+        }
+
+        out.active = (_active_text_field == id);
+        if (out.active) _is_cursor_edits_text = true;
+
+        out.changed = false;
+        out.submitted = false;
+
+        auto selection_begin = [&]() noexcept -> io::usize {
+            return (rt->cursor < rt->anchor) ? rt->cursor : rt->anchor;
+        };
+        auto selection_end = [&]() noexcept -> io::usize {
+            return (rt->cursor > rt->anchor) ? rt->cursor : rt->anchor;
+        };
+        auto has_selection = [&]() noexcept -> bool {
+            return rt->cursor != rt->anchor;
+        };
+
+        auto refresh_len = [&]() noexcept {
+            const io::char_view cur = view_now();
+            rt->cursor = internal::utf8_clamp_boundary(cur, rt->cursor);
+            rt->anchor = internal::utf8_clamp_boundary(cur, rt->anchor);
+            if (tf.text_len) *tf.text_len = len;
+        };
+
+        auto erase_selection = [&]() noexcept -> bool {
+            if (!has_selection()) return false;
+            const io::usize a = selection_begin();
+            const io::usize b = selection_end();
+            internal::text_erase(tf.text, len, a, b);
+            rt->cursor = rt->anchor = a;
+            refresh_len();
+            return true;
+        };
+
+        auto copy_selection = [&]() noexcept {
+            if (!has_selection()) return;
+            const io::usize a = selection_begin();
+            const io::usize b = selection_end();
+            const io::char_view tv = view_now();
+            if (a < b && b <= tv.size()) {
+                (void)internal::clipboard_set(*this, tv.slice(a, b - a));
+            }
+        };
+
+        auto insert_utf8 = [&](io::char_view src) noexcept -> bool {
+            if (!src.data() || src.size() == 0) return false;
+            io::string filtered{};
+            io::usize it = 0;
+            io::u32 cp = 0;
+            while (internal::utf8_next(src, it, cp)) {
+                if (cp < 32u || cp == 127u || cp == '\r' || cp == '\n') continue;
+                char enc[4]{};
+                const io::usize n = internal::utf8_encode(cp, enc);
+                if (n > 0) (void)filtered.append(io::char_view{ enc, n });
+            }
+            if (filtered.empty()) return false;
+            const io::usize at = rt->cursor;
+            const io::usize wrote = internal::text_insert(tf.text, len, at, filtered.as_view());
+            if (!wrote) return false;
+            rt->cursor = rt->anchor = at + wrote;
+            refresh_len();
+            return true;
+        };
+
+        if (out.active && !_ui_input_consumed) {
+            const bool ctrl = Key_t::isPressed(Key::Control) || Key_t::isPressed(Key::Super);
+            const bool shift = Key_t::isPressed(Key::Shift);
+
+            for (io::usize i = 0; i < _key_events.size(); ++i) {
+                const key_event& ev = _key_events[i];
+                if (!ev.pressed) continue;
+
+                switch (ev.key) {
+                case Key::Left: {
+                    const io::char_view tv = view_now();
+                    io::usize pos = rt->cursor;
+                    if (!shift && has_selection()) pos = selection_begin();
+                    else pos = internal::utf8_prev_boundary(tv, pos);
+                    rt->cursor = pos;
+                    if (!shift) rt->anchor = pos;
+                    break;
+                }
+                case Key::Right: {
+                    const io::char_view tv = view_now();
+                    io::usize pos = rt->cursor;
+                    if (!shift && has_selection()) pos = selection_end();
+                    else pos = internal::utf8_next_boundary(tv, pos);
+                    rt->cursor = pos;
+                    if (!shift) rt->anchor = pos;
+                    break;
+                }
+                case Key::Home:
+                    rt->cursor = 0;
+                    if (!shift) rt->anchor = 0;
+                    break;
+                case Key::End:
+                    rt->cursor = len;
+                    if (!shift) rt->anchor = len;
+                    break;
+                case Key::Backspace: {
+                    if (!erase_selection()) {
+                        const io::char_view tv = view_now();
+                        const io::usize prev = internal::utf8_prev_boundary(tv, rt->cursor);
+                        if (prev < rt->cursor) {
+                            internal::text_erase(tf.text, len, prev, rt->cursor);
+                            rt->cursor = rt->anchor = prev;
+                            refresh_len();
+                            out.changed = true;
+                        }
+                    } else {
+                        out.changed = true;
+                    }
+                    break;
+                }
+                case Key::Delete: {
+                    if (!erase_selection()) {
+                        const io::char_view tv = view_now();
+                        const io::usize next = internal::utf8_next_boundary(tv, rt->cursor);
+                        if (next > rt->cursor) {
+                            internal::text_erase(tf.text, len, rt->cursor, next);
+                            rt->anchor = rt->cursor;
+                            refresh_len();
+                            out.changed = true;
+                        }
+                    } else {
+                        out.changed = true;
+                    }
+                    break;
+                }
+                case Key::Return:
+                    out.submitted = true;
+                    break;
+                case Key::A:
+                    if (ctrl) { rt->anchor = 0; rt->cursor = len; }
+                    break;
+                case Key::C:
+                    if (ctrl) copy_selection();
+                    break;
+                case Key::X:
+                    if (ctrl) {
+                        copy_selection();
+                        if (erase_selection()) out.changed = true;
+                    }
+                    break;
+                case Key::V:
+                    if (ctrl) {
+                        io::string clip{};
+                        if (internal::clipboard_get(*this, clip)) {
+                            if (erase_selection()) out.changed = true;
+                            if (insert_utf8(clip.as_view())) out.changed = true;
+                        }
+                    }
+                    break;
+                default:
+                    break;
+                }
+            }
+
+            if (!_text_input_utf8.empty()) {
+                if (has_selection()) {
+                    if (erase_selection()) out.changed = true;
+                }
+                if (insert_utf8(_text_input_utf8.as_view())) out.changed = true;
+            }
+
+            _ui_input_consumed = true;
+        }
+
+        txt = view_now();
+        out.cursor = rt->cursor;
+        out.select_begin = selection_begin();
+        out.select_end = selection_end();
+        out.has_selection = has_selection();
+
+        TextStyle ts = out.active ? tf.style.active : (out.hovered ? tf.style.hover : tf.style.normal);
+        if (!ts.outline) {
+            ts.outline = true;
+            ts.or_ = ts.r; ts.og_ = ts.g; ts.ob_ = ts.b; ts.oa_ = ts.a;
+        }
+
+        const io::u32 border_col = internal::pack_rgba8(ts.or_, ts.og_, ts.ob_, ts.oa_);
+        const float bg_a = out.active ? 0.20f : (out.hovered ? 0.15f : 0.11f);
+        const io::u32 fill_col = internal::pack_rgba8(ts.r, ts.g, ts.b, bg_a);
+        drawUiRect(x0, y0, x1, y1, fill_col, border_col, tf.style.box, false, 1.f);
+
+        if (out.active && out.has_selection && !txt.empty()) {
+            const float sx0 = origin_x + internal::text_advance_to_byte(A, td, _ui_scale, txt, out.select_begin);
+            const float sx1 = origin_x + internal::text_advance_to_byte(A, td, _ui_scale, txt, out.select_end);
+            UiBoxStyle sel_box{};
+            sel_box.border = false;
+            sel_box.border_radius = 2.f;
+            sel_box.pad_top = sel_box.pad_left = sel_box.pad_right = sel_box.pad_bottom = 0.f;
+            const io::u32 sel_col = internal::pack_rgba8(ts.or_, ts.og_, ts.ob_, 0.27f);
+            drawUiRect(sx0, y0 + pad_t_out, sx1, y1 - pad_b_out,
+                       sel_col, sel_col, sel_box, false, 1.f);
+        }
+
+        if (out.active && !out.has_selection) {
+            const float cx = origin_x + internal::text_advance_to_byte(A, td, _ui_scale, txt, out.cursor);
+            UiBoxStyle caret_box{};
+            caret_box.border = false;
+            caret_box.pad_top = caret_box.pad_left = caret_box.pad_right = caret_box.pad_bottom = 0.f;
+            const io::u32 caret_col = internal::pack_rgba8(ts.or_, ts.og_, ts.ob_, ts.oa_);
+            drawUiRect(cx, y0 + pad_t_out, cx + 1.5f, y1 - pad_b_out,
+                       caret_col, caret_col, caret_box, false, 1.f);
+        }
+
+        td.style = ts;
+        td.text = (!txt.empty()) ? txt : tf.style.placeholder;
+        if (txt.empty()) td.style.a *= 0.45f;
+        DrawText(td);
+
+        return out;
+    }
+
+    template <typename Derived>
+    inline SliderState Window<Derived>::Slider(const SliderDraw& s) noexcept {
+        SliderState out{};
+        if (s.atlas < 0 || (io::u32)s.atlas >= _atlases.size() || !s.value) return out;
+        const internal::font_atlas& A = _atlases[(io::u32)s.atlas];
+
+        float min_v = s.min_value;
+        float max_v = s.max_value;
+        if (max_v < min_v) {
+            const float t = min_v;
+            min_v = max_v;
+            max_v = t;
+        }
+        if (max_v - min_v < 1e-7f) max_v = min_v + 1.f;
+
+        const io::u64 fallback_id = (io::u64)reinterpret_cast<io::usize>(s.value);
+        const io::u64 id = (s.id != 0) ? s.id : (fallback_id != 0 ? fallback_id : 1u);
+
+        TextDraw td{};
+        td.atlas = s.atlas;
+        td.dock = s.dock;
+        td.x = s.x; td.y = s.y;
+        td.scale = s.scale;
+        td.text = s.text;
+        td.style = s.style.normal;
+
+        const float vw = (float)width();
+        const float vh = (float)height();
+        float ax = 0.f, ay = 0.f;
+        internal::dock_anchor_px(s.dock, vw, vh, ax, ay);
+        const auto bb = internal::measure_text_bbox_px(A, td, _ui_scale);
+        float dx = 0.f, dy = 0.f;
+        internal::dock_align_shift(s.dock, bb, dx, dy);
+
+        const float origin_x = ax + s.x + dx;
+        const float origin_y = ay + s.y + dy;
+
+        const float pad_l_out = s.style.box.pad_left * internal::k_ui_outer_pad_mul;
+        const float pad_t_out = s.style.box.pad_top * internal::k_ui_outer_pad_mul;
+        const float pad_r_out = s.style.box.pad_right * internal::k_ui_outer_pad_mul;
+        const float pad_b_out = s.style.box.pad_bottom * internal::k_ui_outer_pad_mul;
+
+        float x0 = origin_x + bb.min_x - pad_l_out;
+        float y0 = origin_y + bb.min_y - pad_t_out;
+        float x1 = origin_x + bb.max_x + pad_r_out;
+        float y1 = origin_y + bb.max_y + pad_b_out;
+        if ((x1 - x0) < s.style.min_width) x1 = x0 + s.style.min_width;
+
+        float v = clampSliderValue(*s.value, min_v, max_v, s.step);
+        out.x0 = x0; out.y0 = y0; out.x1 = x1; out.y1 = y1;
+
+        const float mx = mouseX();
+        const float my = mouseY();
+        const bool over_slider = (mx >= x0 && mx <= x1 && my >= y0 && my <= y1);
+        out.hovered = over_slider;
+
+        if (out.hovered) _is_cursor_hovering_button = true;
+
+        const bool mouse_pressed = _mouse_down && !_prev_mouse_down;
+        if (mouse_pressed && over_slider) {
+            _active_slider = id;
+            _active_text_field = 0;
+        }
+        if (!_mouse_down && _active_slider == id) _active_slider = 0;
+
+        out.held = (_active_slider == id) && _mouse_down;
+        out.changed = false;
+        if (out.held) {
+            float nt = (mx - x0) / (x1 - x0);
+            if (nt < 0.f) nt = 0.f;
+            if (nt > 1.f) nt = 1.f;
+            const float nv = clampSliderValue(min_v + nt * (max_v - min_v), min_v, max_v, s.step);
+            if (nv != *s.value) {
+                *s.value = nv;
+                out.changed = true;
+            }
+            v = *s.value;
+        } else {
+            *s.value = v;
+        }
+        out.value = *s.value;
+
+        TextStyle ts = out.held ? s.style.active : (out.hovered ? s.style.hover : s.style.normal);
+        if (!ts.outline) {
+            ts.outline = true;
+            ts.or_ = ts.r; ts.og_ = ts.g; ts.ob_ = ts.b; ts.oa_ = ts.a;
+        }
+        td.style = ts;
+
+        const io::u32 border_col = internal::pack_rgba8(ts.or_, ts.og_, ts.ob_, ts.oa_);
+        const io::u32 base_fill = internal::pack_rgba8(ts.r, ts.g, ts.b, out.held ? 0.18f : (out.hovered ? 0.14f : 0.10f));
+        const float t2 = (*s.value - min_v) / (max_v - min_v);
+        const io::u32 transparent = 0u;
+
+        UiBoxStyle fill_style = s.style.box;
+        // Keep rounded corners for fill pass, but hide its border via transparent color.
+        fill_style.border = true;
+        fill_style.underscored = false;
+        drawUiRect(x0, y0, x1, y1, base_fill, transparent, fill_style, true, 1.f);
+
+        const float in_x0 = x0 + s.style.box.pad_left;
+        const float in_y0 = y0 + s.style.box.pad_top;
+        const float in_x1 = x1 - s.style.box.pad_right;
+        const float in_y1 = y1 - s.style.box.pad_bottom;
+        const float in_w = in_x1 - in_x0;
+
+        if (in_w > 0.5f && in_y1 > in_y0 + 0.5f) {
+            const float in_fill_x = in_x0 + t2 * in_w;
+            const io::u32 progress_fill = internal::pack_rgba8(ts.r, ts.g, ts.b, out.held ? 0.34f : 0.26f);
+            if (in_fill_x > in_x0 + 0.5f) {
+                UiBoxStyle progress_style{};
+                progress_style.border = true;
+                progress_style.border_radius = s.style.box.border_radius;
+                progress_style.underscored = false;
+                progress_style.pad_top = 0.f;
+                progress_style.pad_left = 0.f;
+                progress_style.pad_right = 0.f;
+                progress_style.pad_bottom = 0.f;
+                drawUiRect(in_x0, in_y0, in_fill_x, in_y1, progress_fill, transparent, progress_style, true, 1.f);
+            }
+        }
+
+        UiBoxStyle border_style = s.style.box;
+        border_style.border = true;
+        drawUiRect(x0, y0, x1, y1, transparent, border_col, border_style, true, 1.f);
+
         DrawText(td);
 
         return out;

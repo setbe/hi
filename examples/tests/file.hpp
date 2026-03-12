@@ -17,14 +17,9 @@ namespace test_file {
         static io::atomic<io::u64> g{ 1 };
         io::u64 id = g.fetch_add(1, io::memory_order_relaxed);
 
-        // io::out is our tiny formatting buffer. We reset it and reuse it.
-        // `scrap_view()` returns a `char_view` into that internal buffer.
-#ifndef IO_TERMINAL
-#   error "unique_name() requires `io::out` which defined via IO_TERMINAL"        
-#endif
-        io::out.reset();
-        io::out << id << ".tmp";
-        (void)s.append(io::out.scrap_view());
+        io::StackOut<64> ss{};
+        ss << id << ".tmp";
+        (void)s.append(ss.view());
         return s;
     }
 
@@ -59,7 +54,7 @@ namespace test_file {
         if (!p.append(path)) return;
         if (!fs::exists(p)) return;
         if (!fs::remove(p)) {
-            io::out << "[cleanup] couldn't remove: " << p << io::out.endl;
+            io::out << "[cleanup] couldn't remove: " << p << '\n';
         }
     }
 
@@ -346,7 +341,7 @@ TEST_CASE("directory_iterator works with UTF-8 names", "[fs][unicode]") {
     fs::remove(dir_path);
     bool created = fs::create_directory(dir_path);
     if (!created && !dir_path.empty())
-        io::out << "Couldn't create dir: " << dir_path << io::out.endl;
+        io::out << "Couldn't create dir: " << dir_path << '\n';
     REQUIRE(created);
 
     io::string file_path{};

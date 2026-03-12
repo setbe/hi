@@ -6,6 +6,11 @@
 #include "test_socket.hpp"
 
 TEST_CASE("Attack phases: do not elicit COOKIE/WELCOME; server still handshakes after", "[security]") {
+    if (!test_socket::external_server_ready()) {
+        WARN("Skipping: start server.exe first (test_server.exe is not used here).");
+        return;
+    }
+
     Endpoint srv = test_socket::server_ep();
 
     Socket attacker = test_socket::make_udp_socket();
@@ -120,6 +125,11 @@ TEST_CASE("Attack phases: do not elicit COOKIE/WELCOME; server still handshakes 
 }
 
 TEST_CASE("Peer table pressure: after filling > MAX_PEERS with invalid HELLO payloads, server still handshakes later", "[security]") {
+    if (!test_socket::external_server_ready()) {
+        WARN("Skipping: start server.exe first (test_server.exe is not used here).");
+        return;
+    }
+
     Endpoint srv = test_socket::server_ep();
 
     constexpr u32 N = 80; // > 64

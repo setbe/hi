@@ -33,9 +33,9 @@ namespace test_fs {
         io::string leaf{};
         REQUIRE(leaf.append("hi_fs_test_"));
 
-        io::out.reset();
-        io::out << id;
-        REQUIRE(leaf.append(io::out.scrap_view()));
+        io::StackOut<64> ss{};
+        ss << id;
+        REQUIRE(leaf.append(ss.view()));
 
         io::string dir{};
         REQUIRE(fs::path_join(cwd, leaf, dir));
@@ -56,7 +56,7 @@ namespace test_fs {
         if (!fs::exists(p)) return;
 
         if (!fs::remove(p)) {
-            io::out << "[cleanup] couldn't remove: " << p << io::out.endl;
+            io::out << "[cleanup] couldn't remove: " << p << '\n';
         }
     }
 

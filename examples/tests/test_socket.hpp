@@ -2,6 +2,9 @@
 
 #include "catch.hpp"
 #include "../../hi/socket.hpp"
+#if defined(_WIN32)
+#   include <tlhelp32.h>
+#endif
 
 using namespace io;
 
@@ -13,6 +16,96 @@ namespace test_socket {
         ep.addr_be = IP::from_string("127.0.0.1");
         ep.port_be = io::h2ns(SERVER_PORT);
         return ep;
+    }
+
+    static inline bool is_server_exe_running() noexcept {
+#if defined(_WIN32)
+        HANDLE snap = ::CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if (snap == INVALID_HANDLE_VALUE) return false;
+
+        PROCESSENTRY32W pe{};
+        pe.dwSize = sizeof(pe);
+
+        bool found = false;
+        if (::Process32FirstW(snap, &pe)) {
+            do {
+                if (::lstrcmpiW(pe.szExeFile, L"server.exe") == 0) {
+                    found = true;
+                    break;
+                }
+            } while (::Process32NextW(snap, &pe));
+        }
+
+        ::CloseHandle(snap);
+        return found;
+#else
+        return true;
+#endif
+    }
+
+    static inline bool recv_one(Socket& s, Endpoint& from, u8* buf, usize cap, int& out_n, u64 timeout_ms) noexcept;
+    static inline u32 build_udp_datagram(u8* out, u32 cap,
+                                         u32 magic, u16 version, u32 seq, u32 ack, u64 ack_bits,
+                                         u8 chan, u8 type,
+                                         const u8* payload, u16 payload_len_in_header,
+                                         u32 payload_bytes_to_copy) noexcept;
+    static inline bool send_raw(Socket& s, Endpoint to, const u8* bytes, u32 len) noexcept;
+
+    static inline bool server_endpoint_responds(u64 timeout_ms = 300) noexcept {
+        Socket s{};
+        if (!s.open(Protocol::UDP)) return false;
+
+        Endpoint bind_ep{};
+        bind_ep.addr_be = IP::from_string("0.0.0.0");
+        bind_ep.port_be = io::h2ns(0);
+        if (!s.bind(bind_ep)) return false;
+        if (!s.set_blocking(false)) return false;
+
+        Endpoint srv = server_ep();
+
+        constexpr u32 BUF_CAP = 512;
+        u8 tx[BUF_CAP]{};
+        u8 rx[BUF_CAP]{};
+
+        msg_hello h{};
+        h.mtu = io::h2ns(1200);
+        h.features = io::h2ns(FEATURE_COOKIE);
+        h.client_nonce = io::h2nl(0xA1B2C3D4u);
+
+        const u32 n = build_udp_datagram(
+            tx, BUF_CAP,
+            UDP_MAGIC, UDP_VERSION,
+            /*seq=*/1, /*ack=*/0, /*ack_bits=*/0,
+            (u8)UdpChan::Unreliable, MSG_HELLO,
+            (const u8*)&h, (u16)sizeof(h), (u32)sizeof(h)
+        );
+        if (!n) return false;
+        if (!send_raw(s, srv, tx, n)) return false;
+
+        Endpoint from{};
+        int got = 0;
+        if (!recv_one(s, from, rx, BUF_CAP, got, timeout_ms)) return false;
+        if (!endpoint_eq(from, srv)) return false;
+        if (got < (int)sizeof(UdpHeader)) return false;
+
+        UdpHeader uh{};
+        for (usize i = 0; i < sizeof(UdpHeader); ++i) ((u8*)&uh)[i] = rx[i];
+        udp_header_wire_to_host(uh);
+
+        if (uh.magic != UDP_MAGIC) return false;
+        if (uh.version != UDP_VERSION) return false;
+        if (uh.type != MSG_COOKIE) return false;
+        if (uh.payload_len != sizeof(msg_cookie)) return false;
+        if (got != (int)sizeof(UdpHeader) + (int)sizeof(msg_cookie)) return false;
+
+        return true;
+    }
+
+    static inline bool external_server_ready() noexcept {
+#if defined(_WIN32)
+        if (!is_server_exe_running()) return false;
+#endif
+        return server_endpoint_responds();
     }
 
     static inline bool would_block(Error e) noexcept {

@@ -8,7 +8,7 @@ static io::Endpoint g_server{};
 static void on_established(void* ud, io::Endpoint peer, io::u32 sid) {
     auto* loop = (Loop*)ud;
 
-    io::out << "ESTABLISHED peer=" << peer << " sid=" << sid << '\n' << io::out.endl;
+    io::out << "ESTABLISHED peer=" << peer << " sid=" << sid << '\n';
 
     static const io::u8 ping[] = { 'P','I','N','G' };
     const bool ok = loop->send_to_peer(
@@ -18,23 +18,23 @@ static void on_established(void* ud, io::Endpoint peer, io::u32 sid) {
         io::byte_view(ping, sizeof(ping)),
         io::monotonic_ms()
     );
-    if (!ok) io::out << "send ping failed\n" << io::out.endl;
+    if (!ok) io::out << "send ping failed\n";
 }
 
 static void on_packet(void*, io::Endpoint from, io::u8 type, io::UdpChan, io::byte_view payload) {
     if (!io::endpoint_eq(from, g_server)) return;
 
     if (type == 32) {
-        io::out << "ECHO: " << payload << '\n' << io::out.endl;
+        io::out << "ECHO: " << payload << '\n';
     }
 }
 
 static void on_drop(void*, io::Endpoint from, io::Error why, io::DropReason dr) {
-    io::out << "DROP from " << from << " err=" << why << " reason=" << dr << '\n' << io::out.endl;
+    io::out << "DROP from " << from << " err=" << why << " reason=" << dr << '\n';
 }
 
 static void on_disconnect(void*, io::Endpoint peer, io::u32 /*session_id*/, io::DisconnectReason why) {
-    io::out << "DISCONNECT peer=" << peer << " why=" << why << '\n' << io::out.endl;
+    io::out << "DISCONNECT peer=" << peer << " why=" << why << '\n';
 }
 
 
@@ -77,7 +77,7 @@ int main() {
     cb.on_disconnect = &on_disconnect;
     cb.ud = &loop;
 
-    io::out << "client started\n" << io::out.endl;
+    io::out << "client started\n";
     loop.run_udp(udp, cb, recv_buf.get(), RECV_BUF_SIZE);
     return 0;
 }

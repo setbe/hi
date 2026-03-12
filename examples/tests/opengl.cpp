@@ -5,6 +5,15 @@
 #include "../../hi/io.hpp"
 #include "../../hi/hi.hpp"
 
+#if defined(_WIN32)
+static inline void clear_thread_quit_message() noexcept {
+    MSG msg{};
+    while (::PeekMessageW(&msg, nullptr, WM_QUIT, WM_QUIT, PM_REMOVE)) {}
+}
+#else
+static inline void clear_thread_quit_message() noexcept {}
+#endif
+
 struct interactive_state {
     bool ok = false;
     bool done = false;
@@ -31,7 +40,7 @@ struct TestWindow : public hi::Window<TestWindow> {
         st.last_h = height();
     }
 
-    void onRender() noexcept override {
+    void onRender(float) noexcept override {
         static float red = 0.f;
         red += 0.01f;
         if (red > 1.f) red = 0.f;
@@ -74,9 +83,6 @@ static inline bool run_step(TestWindow& w, bool (*cond)(const interactive_state&
     w.setTitle(title);
     int frames = 0;
     while (w.PollEvents()) {
-        w.Render();
-        w.SwapBuffers();
-
         if (cond(w.st)) return true;
         if (++frames >= max_frames) return false;
     }
@@ -90,7 +96,6 @@ TEST_CASE("hi interactive: mouse/resize/scroll/focus", "[hi][window][interactive
     w.setTitle(IO_U8("Do you see red screen animation? Press Y/N"));
     while (w.PollEvents() && !w.st.done) {
         w.Render();
-        w.SwapBuffers();
     }
     if (!w.st.done)
         w.st.ok = true; // user closed tests manually
@@ -131,7 +136,7 @@ struct SmokeWindow : public hi::Window<SmokeWindow> {
         setTitle(IO_U8("GL smoke test..."));
         if (api() != hi::RendererApi::Opengl) gl_ok = false;
     }
-    void onRender() noexcept override {}
+    void onRender(float) noexcept override {}
     void onError(hi::Error, hi::AboutError ae) noexcept override {
         gl_ok = false;
         setTitle(hi::what(ae));
@@ -143,14 +148,17 @@ IO_CONSTEXPR_VAR io::u8 GL_CORE_MAJOR = 3;
 IO_CONSTEXPR_VAR io::u8 GL_CORE_MINOR = 3;
 
 TEST_CASE("gl loader smoke: functions callable", "[gl][smoke]") {
+    clear_thread_quit_message();
     SmokeWindow w{};
     REQUIRE(w.gl_ok);
     REQUIRE(w.api() == hi::RendererApi::Opengl);
 
     // one frame to ensure context current
+    if (!w.PollEvents()) {
+        clear_thread_quit_message();
+    }
     REQUIRE(w.PollEvents());
     w.Render();
-    w.SwapBuffers();
 
     const int real_maj = w.g.currentMajorVersion();
     const int real_min = w.g.currentMinorVersion();
@@ -185,10 +193,13 @@ TEST_CASE("gl loader smoke: functions callable", "[gl][smoke]") {
 }
 
 TEST_CASE("gl high-level wrappers: shader/buffer/vao", "[gl][wrap]") {
+    clear_thread_quit_message();
     SmokeWindow w;
+    if (!w.PollEvents()) {
+        clear_thread_quit_message();
+    }
     REQUIRE(w.PollEvents());
     w.Render();
-    w.SwapBuffers();
 
     // --- Shader: separated core/es versions ---
 #if defined(__linux__) || defined(_WIN32)

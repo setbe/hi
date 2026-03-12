@@ -329,6 +329,9 @@ endfunction()
 
 set(SOURCES_IO "hi/io.hpp")
 set(SOURCES_HI "hi/hi.hpp")
+set(SOURCES_AUDIO
+    "hi/audiocontext.hpp"
+)
 set(TEST_SOURCES_IO_HI
     ${SOURCES_IO}
     ${SOURCES_HI}
@@ -363,6 +366,7 @@ set(TEST_SOURCES_CRYPTO
 hi_add_header_only(io ${SOURCES_IO})
 hi_add_header_only(hi ${SOURCES_HI})
 hi_add_header_only(crypto ${SOURCES_CRYPTO})
+hi_add_header_only(audio ${SOURCES_AUDIO})
 
 # -----------------------------------------------------------------------------
 # Freestanding examples
@@ -417,6 +421,37 @@ hi_add_test_exe(test_thread
     CPP "examples/tests/thread.cpp"
     HEADERS ${SOURCES_IO}
     LIBS io
+)
+
+# audio
+hi_add_test_exe(test_audio
+    CPP "examples/tests/test_audio.cpp"
+    HEADERS ${SOURCES_AUDIO}
+    LIBS io audio winmm
+)
+
+hi_add_test_exe(test_wav
+    CPP "examples/tests/test_wav.cpp"
+    HEADERS ${SOURCES_AUDIO} ${SOURCES_IO}
+    LIBS io audio winmm
+)
+
+hi_add_test_exe(test_fade_in_out
+    CPP "examples/tests/test_fade_in_out.cpp"
+    HEADERS ${SOURCES_AUDIO} ${SOURCES_IO}
+    LIBS io audio winmm
+)
+
+hi_add_test_exe(test_audio_mixer
+    CPP "examples/tests/test_audio_mixer.cpp"
+    HEADERS ${SOURCES_AUDIO} ${SOURCES_IO}
+    LIBS io audio winmm
+)
+
+hi_add_test_exe(test_audio_scheduler
+    CPP "examples/tests/test_audio_scheduler.cpp"
+    HEADERS ${SOURCES_AUDIO} ${SOURCES_IO}
+    LIBS io audio winmm
 )
 
 # thread VTune threading test

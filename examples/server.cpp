@@ -4,7 +4,7 @@
 using Loop = io::EventLoop<1200, 2048>;
 
 static void on_established(void*, io::Endpoint peer, io::u32 sid) {
-    io::out << "ESTABLISHED peer=" << peer << " sid=" << sid << '\n' << io::out.endl;
+    io::out << "ESTABLISHED peer=" << peer << " sid=" << sid << '\n';
 }
 
 static void on_packet(void* ud, io::Endpoint from, io::u8 type,
@@ -14,7 +14,7 @@ static void on_packet(void* ud, io::Endpoint from, io::u8 type,
     io::out << "PKT type=" << (io::u32)type
         << " chan=" << (io::u32)chan
         << " bytes=" << (io::u32)payload.size()
-        << " from " << from << '\n' << io::out.endl;
+        << " from " << from << '\n';
 
     // user packets only (example: type>=32)
     if (type < 32) return;
@@ -26,11 +26,11 @@ static void on_packet(void* ud, io::Endpoint from, io::u8 type,
 }
 
 static void on_drop(void*, io::Endpoint from, io::Error why, io::DropReason dr) {
-    io::out << "DROP from " << from << " err=" << why << " reason=" << dr << '\n' << io::out.endl;
+    io::out << "DROP from " << from << " err=" << why << " reason=" << dr << '\n';
 }
 
 static void on_disconnect(void*, io::Endpoint peer, io::u32 /*session_id*/, io::DisconnectReason why) {
-    io::out << "DISCONNECT peer=" << peer << " why=" << why << '\n' << io::out.endl;
+    io::out << "DISCONNECT peer=" << peer << " why=" << why << '\n';
 }
 
 
@@ -58,7 +58,7 @@ int main() {
     cb.on_disconnect = &on_disconnect;
     cb.ud = &loop;
 
-    io::out << "server started on :7777\n" << io::out.endl;
+    io::out << "server started on :7777\n";
     loop.run_udp(udp, cb, recv_buf.get(), RECV_BUF_SIZE);
     return 0;
 }

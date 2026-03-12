@@ -1,141 +1,172 @@
-# hi — freestanding C++ framework
+# hi - freestanding C++ framework
 
-`hi` is a **freestanding-friendly C++ framework** for building low-level applications, tools, GUI systems, and runtimes **without relying on the C++ standard library, libc, or CRT**.
+`hi` is a freestanding-first C++ framework for low-level applications:
+- custom runtime (`io::`)
+- filesystem (`fs::`)
+- networking (`socket.hpp`, also `io::`)
+- windowing + GUI + OpenGL loader (`hi::`, `gl::`)
 
-The project is designed for **explicit control over memory, object lifetime, and OS interaction**, with a clean separation between platform-agnostic core code and platform-specific implementations.
+The project is intentionally designed without STL/CRT assumptions in freestanding builds, with explicit ownership, predictable cost, and platform-isolated backends.
 
-This is **not** a wrapper around STL, and **not** a convenience library.  
-It is a foundation for systems-level software.
+## Current Snapshot [gl.cpp](examples/gl.cpp)
 
----
+- Primary targets: Windows x64/x86 and Linux x64/x86.
+- Typical release binary size (measured on this repository): `83 KB` (Win32), `93 KB` (x64).
+- Runtime profile for `examples/gl.cpp` (sample machine): CPU `1-5%`, GPU `3-10%` (GTX 1650), RAM `34-40 MB`.
+- Default render pacing: `hi::Window` starts with VSync enabled and target FPS set to `144`.
 
-## Design Goals
+![](resources/img/snapshot_march_10_2026.jpg)
 
-- No dependency on the C++ Standard Library containers or strings
-- Freestanding-friendly (custom allocators, no CRT usage)
-- Explicit ownership and lifetime semantics
-- Minimal abstractions with predictable cost
-- Suitable for GUI frameworks, engines, and low-level tools
+## Project Goals
 
----
+- Build practical systems software without mandatory hosted runtime dependencies.
+- Keep API surface explicit: no hidden ownership, no hidden lifetime transfers.
+- Keep performance predictable and measurable.
+- Support real apps: GUI, networking, crypto, file IO, event loops.
 
-## Non-Goals
+## Achievements So Far
 
-- STL compatibility or drop-in replacements;
+- Freestanding-friendly core runtime in `hi/io.hpp`.
+- Cross-platform filesystem with UTF-8 API and platform-native conversion internally.
+- UDP networking core with handshake, anti-spoof cookie challenge, reliable channel, and replay windowing.
+- OpenGL window abstraction (OpenGL loader+window management) and immediate-mode GUI primitives.
+- Font pipeline using freestanding `stb_truetype_stream` fork that plans atlas size up front, uses one dynamic allocation for generation, and supports SDF/MTSDF output.
+- Catch-based tests across IO, filesystem, threading, crypto, networking, and GL behavior.
 
----
+## Near-Term Plan
 
-## Core Components
+- Continue hardening Linux behavior and parity with Windows.
+- Reduce per-frame dynamic allocations in GUI/input paths.
+- Expand public API docs with strict behavior contracts and edge-case notes.
+- Keep binary footprint low while adding features.
 
-### Containers
+## Repository Layout
 
-Custom containers implemented without STL:
+- `hi/` - public headers (`io.hpp`, `hi.hpp`, `socket.hpp`, `gl_loader.hpp`, crypto headers).
+- `examples/` - runnable freestanding samples (`client`, `server`, `gl`) and test entry points.
+- `examples/tests/` - Catch tests and test helpers (not freestanding, has STD dependencies).
+- `3rd_party/` - bundled dependencies and forks.
+- `CMakeLists.txt` + `CMakePresets.json` - build matrix and configs.
 
-- `io::vector<T>` - dynamic array with explicit lifetime control;
-- `io::deque<T>` - ring-buffer based deque;
-- `io::list<T>` - doubly-linked list;
-- `io::view<T>` - non-owning span-like view.
+## Build Configurations
 
-All containers are *move-only* by design.
+The project defines multi-config build modes:
 
-### Strings
+- `Debug` - debug-oriented hosted build.
+- `Release` - optimized hosted build.
+- `ReleaseMini` - freestanding-focused minimal release.
+- `ReleaseNoConsole` - GUI subsystem build.
+- `ReleaseMiniNoConsole` - freestanding-focused GUI release.
 
-Unified string implementation:
+## Build - Windows
 
-```cpp
-io::string   // UTF-8 string
-io::wstring  // wide string (UTF-16 on Windows)
+### Requirements
+
+- Visual Studio 2022 (Desktop C++).
+- CMake 3.22+.
+- Git.
+
+### Configure
+
+```bash
+git clone --recurse-submodules https://github.com/setbe/hi.git
+cd hi
+cmake --list-presets
+cmake --preset win64
 ```
 
-Key properties:
+For 32-bit:
 
-- Always NUL-terminated;
-- Built on top of io::vector;
-- No Small String Optimization;
-- Safe for OS interop (c_str() always valid).
-
-## Filesystem
-
-Cross-platform filesystem API with platform-specific backends.
-
-Features:
-
-- File and directory status;
-- Directory iteration;
-- UTF-8 paths in public API;
-- UTF-16 / UTF-8 conversion handled internally;
-- No fixed-size path buffers;
-- RAII-based directory handles.
-
-Example:
-
-```cpp
-io::string cwd;
-fs::current_directory(cwd);
-io::out << cwd << io::out.endl;
+```bash
+cmake --preset win32
 ```
 
-## Atomic & Syscalls
+### Build examples
 
-- `io::atomic<T>` - freestanding atomic abstraction
-- Fallbacks for non-STL environments
-
-OS syscalls:
-- alloc / free
-- exit_process
-- sleep_ms
-- monotonic_ms
-- secure_zero
-
-## Windowing & Rendering
-
-- CRTP-based window abstraction
-- Platform-specific implementations
-- OpenGL backend (Windows)
-- No implicit message pumps or hidden globals
-
-Example:
-
-```cpp
-struct MainWindow : public hi::Window<MainWindow> {
-    void onRender() noexcept override {
-        gl::Clear(gl::buffer_bit.Color);
-        this->SwapBuffers();
-    }
-};
+```bash
+cmake --build build/win64 --config ReleaseMini --target client
+cmake --build build/win64 --config ReleaseMini --target server
+cmake --build build/win64 --config ReleaseMini --target gl
 ```
 
-## Building
+You can also open the generated solution in `build/win64` (or `build/win32`) and build targets in Visual Studio.
 
-See [README.md at "hi/"](hi/) for more info.
+## Build - Linux
 
-## Testing
+### Requirements
 
-The project includes extensive Catch2 tests covering:
+Install compiler + CMake + Ninja + X11/OpenGL development packages.
 
-- Container lifetime and move semantics
-- Filesystem behavior on real OS paths
-- Directory iteration correctness
-- Syscalls and process behavior
-- String and view invariants
+Debian/Ubuntu example:
 
-Tests are designed to catch lifetime bugs and ABI-level issues, not just logic errors.
+```bash
+sudo apt install build-essential cmake ninja-build git \
+  libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+  libgl1-mesa-dev libglu1-mesa-dev mesa-common-dev
+```
 
-## Supported Platforms
+### Configure
 
-- Windows (primary target)
-- Linux (in progress)
-- Android (in planning)
+```bash
+cmake --list-presets
+cmake --preset l
+```
+
+For 32-bit Linux (multilib toolchain required):
+
+```bash
+cmake --preset l32
+```
+
+### Build examples
+
+```bash
+cmake --build build/l --config ReleaseMini --target client
+cmake --build build/l --config ReleaseMini --target server
+cmake --build build/l --config ReleaseMini --target gl
+```
+
+## Tests
+
+Main test targets:
+
+- `test_io_hi`
+- `test_server`
+- `test_client`
+- `test_crypto`
+- `test_gl`
+- `test_thread`
+
+Run examples (Windows path shown):
+
+```bash
+build/win64/Release/test_io_hi.exe
+build/win64/Release/test_server.exe
+build/win64/Release/test_client.exe
+build/win64/Release/test_crypto.exe
+build/win64/Release/test_gl.exe ~[interactive]
+```
+
+Important notes:
+
+- `test_client` is intended to run only with external `server.exe` already running.
+- `test_crypto` currently fails in X25519-related checks. That area is intentionally under active work.
+- `test_gl` contains interactive and non-interactive cases; `~[interactive]` runs only non-interactive tests.
+
+## Documentation
+
+- Repository-level overview: this file.
+- Full public API documentation: `hi/README.md`.
 
 ## Philosophy
 
-- Ownership must be explicit
-- Lifetime must be visible
-- Abstractions must have predictable cost
-- OS interaction must be explicit and isolated
-- Simplicity over convenience
+- Explicit ownership.
+- Explicit lifetime.
+- Small and understandable abstractions.
+- Platform control over hidden magic.
+- Measurable performance over convenience wrappers.
 
 ## Status
 
-Active development.
-APIs may evolve, but design principles are stable.
+Active development.  
+APIs evolve, but the freestanding-first direction and explicit design principles are stable.
